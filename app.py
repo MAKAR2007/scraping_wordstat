@@ -70,29 +70,44 @@ def search():
         return jsonify({"error": "Не задана ключевая фраза"}), 400
 
     devices = payload.get("devices") or None
+    otp = bool(payload.get("otp"))
     window = last_full_months()
+
+    # При включённом тумблере ОТП основные данные строятся по фразе со словом
+    # «ОТП», а исходная фраза («общие запросы») используется для расчёта доли.
+    query_phrase = (phrase + " ОТП") if otp else phrase
 
     client = WordstatClient()
     index = get_subject_index(client)
 
     try:
         # 1. Распределение по регионам -> только субъекты РФ.
-        dist_raw = client.get_regions_distribution(phrase, devices=devices)
+        dist_raw = client.get_regions_distribution(query_phrase, devices=devices)
         regions = filter_to_subjects(dist_raw.get("results"), index)
 
         # 2. Динамика частоты за последние 12 полных месяцев (по всем субъектам РФ).
         dyn_raw = client.dynamics_window(
-            phrase, window, region_id="ALL",
+            query_phrase, window, region_id="ALL",
             all_region_ids=all_subject_ids(index), devices=devices,
         )
         dynamics = _normalize_dynamics(dyn_raw.get("results"))
+
+        # 3. Доля ОТП: count(фраза + «ОТП») / count(фраза) по регионам.
+        otp_block = None
+        if otp:
+            base_raw = client.get_regions_distribution(phrase, devices=devices)
+            base_regions = filter_to_subjects(base_raw.get("results"), index)
+            otp_block = _build_otp_share(regions, base_regions)
 
     except YandexError as exc:
         return jsonify({"error": str(exc)}), 502
 
     total = sum(r["count"] for r in regions)
     return jsonify({
-        "phrase": phrase,
+        "phrase": query_phrase,
+        "basePhrase": phrase,
+        "otp": otp,
+        "otpShare": otp_block,
         "demo": client.demo_mode,
         "totalCount": total,
         "regionsCount": len(regions),
@@ -164,6 +179,44 @@ def export_excel():
 
 
 # ----------------------------------------------------------- helpers ---
+def _build_otp_share(otp_regions, base_regions):
+    """Доля запросов со словом «ОТП» от общих запросов по каждому субъекту РФ.
+
+    :param otp_regions: распределение по фразе «… ОТП» (count = запросы с ОТП).
+    :param base_regions: распределение по исходной фразе (общие запросы).
+    :return: dict с суммарной долей и построчной разбивкой (отсортировано по
+             общему числу запросов по убыванию).
+    """
+    base_by_id = {r["id"]: r["count"] for r in base_regions}
+    otp_by_id = {r["id"]: r["count"] for r in otp_regions}
+    names = {r["id"]: r["name"] for r in base_regions}
+    names.update({r["id"]: r["name"] for r in otp_regions})
+
+    rows = []
+    for rid in set(base_by_id) | set(otp_by_id):
+        base_c = base_by_id.get(rid, 0)
+        otp_c = otp_by_id.get(rid, 0)
+        share = round(otp_c / base_c * 100, 2) if base_c else 0.0
+        rows.append({
+            "id": rid,
+            "name": names.get(rid, rid),
+            "otpCount": otp_c,
+            "baseCount": base_c,
+            "share": share,
+        })
+    rows.sort(key=lambda r: r["baseCount"], reverse=True)
+
+    total_otp = sum(r["otpCount"] for r in rows)
+    total_base = sum(r["baseCount"] for r in rows)
+    total_share = round(total_otp / total_base * 100, 2) if total_base else 0.0
+    return {
+        "totalOtp": total_otp,
+        "totalBase": total_base,
+        "totalShare": total_share,
+        "regions": rows,
+    }
+
+
 def _normalize_dynamics(results):
     out = []
     for item in results or []:
@@ -198,7 +251,7 @@ def _build_workbook(phrase, regions, dynamics, window, matrix):
     matrix = matrix or {}
 
     wb = Workbook()
-    header_fill = PatternFill("solid", fgColor="52AE30")   # фирменный зелёный ОТП
+    header_fill = PatternFill("solid", fgColor="7E3FF2")   # фирменный фиолетовый ОТП
     header_font = Font(bold=True, color="FFFFFF")
 
     def style_header(ws, row, ncols):
@@ -294,4 +347,5 @@ def _safe_name(phrase):
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    port = int(os.environ.get("PORT", "5000"))
+    app.run(host="127.0.0.1", port=port, debug=False)

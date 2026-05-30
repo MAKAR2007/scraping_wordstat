@@ -43,9 +43,18 @@
             <option value="PERIOD_DAILY">По дням</option>
           </select>
         </div>
+        <div class="field">
+          <label for="otpToggle">Бренд «ОТП»</label>
+          <label class="switch" title="Добавить слово «ОТП» к запросу и показать долю ОТП">
+            <input type="checkbox" id="otpToggle">
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+            <span class="switch-text">ОТП</span>
+          </label>
+        </div>
         <button type="submit" id="searchBtn" class="btn btn--primary">Искать</button>
       </form>
-      <p class="hint">Данные строго разбиваются по самостоятельным регионам РФ. Федеральные округа исключены.</p>
+      <p class="hint">Данные строго разбиваются по самостоятельным регионам РФ. Федеральные округа исключены.
+        При включённом тумблере «ОТП» к запросу добавляется слово «ОТП», а ниже выводится доля ОТП от общих запросов.</p>
     </section>
 
     <div id="error" class="error hidden"></div>
@@ -102,6 +111,15 @@
           <div class="chart-box"><canvas id="shareChart"></canvas></div>
         </section>
       </div>
+
+      <section class="panel hidden" id="otpPanel">
+        <div class="panel-head">
+          <h2>Доля ОТП от общих запросов</h2>
+          <span id="otpTotalShare" class="badge badge--live" title="Суммарная доля ОТП по всем субъектам РФ"></span>
+        </div>
+        <p class="chart-note">Доля запросов со словом «ОТП» относительно общих запросов по фразе, по регионам (топ-15 по общему спросу)</p>
+        <div class="chart-box"><canvas id="otpShareChart"></canvas></div>
+      </section>
 
       <section class="panel">
         <div class="panel-head">

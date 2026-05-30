@@ -1,15 +1,21 @@
 :root {
-  /* Фирменная палитра в стиле ОТП Банка */
-  --brand: #52AE30;
-  --brand-dark: #438f27;
-  --brand-soft: #eaf6e6;
-  --accent: #0a7d3c;
-  --ink: #1b2a1b;
-  --muted: #6b7770;
-  --line: #e5eae2;
-  --bg: #f3f6f2;
+  /* Фирменная палитра ОТП Банка: салатовый + оранжевый + фиолетовый */
+  --brand: #8CC63F;            /* салатовый — основной */
+  --brand-dark: #6FA82E;
+  --brand-soft: #eef7e0;
+  --orange: #F5821F;           /* оранжевый акцент */
+  --orange-dark: #d96f12;
+  --orange-soft: #fff1e2;
+  --violet: #7E3FF2;           /* фиолетовый акцент */
+  --violet-dark: #6a2fd6;
+  --violet-soft: #f0eafe;
+  --accent: #7E3FF2;           /* акцентный цвет значений = фиолетовый */
+  --ink: #211b2a;
+  --muted: #74707d;
+  --line: #e7e3ee;
+  --bg: #f6f4fb;
   --card: #ffffff;
-  --shadow: 0 1px 3px rgba(20, 50, 20, .08), 0 1px 2px rgba(20, 50, 20, .04);
+  --shadow: 0 1px 3px rgba(40, 20, 60, .08), 0 1px 2px rgba(40, 20, 60, .05);
 }
 
 * { box-sizing: border-box; }
@@ -29,14 +35,18 @@ body {
   padding: 14px 28px;
   background: var(--card);
   border-bottom: 1px solid var(--line);
+  border-top: 3px solid;
+  border-image: linear-gradient(90deg, var(--brand), var(--orange), var(--violet)) 1;
 }
 
 .brand { display: flex; align-items: center; gap: 14px; }
 .logo {
   min-width: 52px; height: 40px; padding: 0 10px;
   display: grid; place-items: center;
-  background: var(--brand); color: #fff;
+  background: linear-gradient(135deg, var(--brand) 0%, var(--violet) 100%);
+  color: #fff;
   font-weight: 800; font-size: 17px; letter-spacing: .5px; border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(126, 63, 242, .25);
 }
 .topbar h1 { margin: 0; font-size: 18px; letter-spacing: -.2px; }
 .subtitle { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; }
@@ -45,8 +55,8 @@ body {
   font-size: 12px; font-weight: 600;
   padding: 5px 11px; border-radius: 999px;
 }
-.badge--demo { background: #fff4e5; color: #b45309; }
-.badge--live { background: var(--brand-soft); color: var(--accent); }
+.badge--demo { background: var(--orange-soft); color: var(--orange-dark); }
+.badge--live { background: var(--brand-soft); color: var(--brand-dark); }
 
 main { max-width: 1180px; margin: 22px auto; padding: 0 22px; }
 
@@ -76,8 +86,25 @@ input, select {
   color: var(--ink);
   outline: none;
 }
-input:focus, select:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(82,174,48,.18); }
+input:focus, select:focus { border-color: var(--violet); box-shadow: 0 0 0 3px rgba(126,63,242,.16); }
 .hint { margin: 12px 0 0; color: var(--muted); font-size: 12px; }
+
+/* Тумблер «ОТП» */
+.switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; height: 40px; }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.switch-track {
+  position: relative; width: 42px; height: 24px; border-radius: 999px;
+  background: var(--line); transition: background .15s;
+}
+.switch-thumb {
+  position: absolute; top: 2px; left: 2px; width: 20px; height: 20px;
+  border-radius: 50%; background: #fff; box-shadow: var(--shadow);
+  transition: transform .15s;
+}
+.switch input:checked + .switch-track { background: var(--brand); }
+.switch input:checked + .switch-track .switch-thumb { transform: translateX(18px); }
+.switch input:focus-visible + .switch-track { box-shadow: 0 0 0 3px rgba(82,174,48,.18); }
+.switch-text { font-size: 13px; font-weight: 700; color: var(--ink); }
 
 .btn {
   font: inherit; font-weight: 700;
@@ -87,8 +114,8 @@ input:focus, select:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rg
 .btn:active { transform: translateY(1px); }
 .btn--primary { background: var(--brand); color: #fff; }
 .btn--primary:hover { background: var(--brand-dark); }
-.btn--export { background: var(--brand); color: #fff; width: 100%; }
-.btn--export:hover { background: var(--brand-dark); }
+.btn--export { background: var(--orange); color: #fff; width: 100%; }
+.btn--export:hover { background: var(--orange-dark); }
 .btn:disabled { opacity: .6; cursor: default; }
 
 .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; }
@@ -119,8 +146,8 @@ input:focus, select:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rg
 .table-wrap { max-height: 360px; overflow: auto; border: 1px solid var(--line); border-radius: 12px; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); }
-th { position: sticky; top: 0; background: var(--brand-soft); font-size: 12px; color: var(--accent); z-index: 1; }
-tbody tr:hover { background: #f6faf4; }
+th { position: sticky; top: 0; background: var(--violet-soft); font-size: 12px; color: var(--violet-dark); z-index: 1; }
+tbody tr:hover { background: var(--brand-soft); }
 td:nth-child(3), td:last-child, th:nth-child(3), th:last-child { text-align: right; }
 #topTable td:last-child, #topTable th:last-child { text-align: right; }
 

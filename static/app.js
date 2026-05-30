@@ -2,16 +2,21 @@
 
 // Состояние последнего ответа — используется для выгрузки и перерисовки графиков.
 let state = { phrase: "", regions: [], dynamics: [], top: { results: [] }, windowLabels: [] };
+feat/requests-distribution-histogram
 let charts = { regions: null, dynamics: null, share: null, dist: null };
+charts = { regions: null, dynamics: null, share: null, otp: null };
+main
 let topLimit = 15;
 
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => (n || 0).toLocaleString("ru-RU");
 
-const BRAND = "#52AE30";
-// Зелёная палитра в фирменном стиле ОТП Банка.
-const PALETTE = ["#52AE30", "#0a7d3c", "#8DCB6B", "#2f7d4f", "#b6e0a0",
-  "#1f9d55", "#3fae6a", "#6fae3a", "#0f7a4a", "#9ccf7a"];
+const BRAND = "#8CC63F";       // салатовый — основной цвет ОТП
+const ORANGE = "#F5821F";      // оранжевый акцент
+const VIOLET = "#7E3FF2";      // фиолетовый акцент
+// Палитра в фирменном стиле ОТП Банка: салатовый → оранжевый → фиолетовый.
+const PALETTE = ["#8CC63F", "#F5821F", "#7E3FF2", "#A4D65E", "#FBA94C",
+  "#9B6BF5", "#6FA82E", "#F9C784", "#B89BF8", "#C7E59F"];
 
 document.addEventListener("DOMContentLoaded", () => {
   checkStatus();
@@ -19,6 +24,10 @@ document.addEventListener("DOMContentLoaded", () => {
   $("exportBtn").addEventListener("click", onExport);
   $("tableFilter").addEventListener("input", renderRegionsTable);
   $("dynRegion").addEventListener("change", refreshDynamics);
+  $("otpToggle").addEventListener("change", () => {
+    // Перезапускаем поиск, чтобы данные пересобрались с/без слова «ОТП».
+    if ($("phrase").value.trim()) $("searchForm").requestSubmit();
+  });
   document.querySelectorAll(".toggle-btn").forEach((b) => {
     b.addEventListener("click", () => {
       document.querySelectorAll(".toggle-btn").forEach((x) => x.classList.remove("active"));
@@ -60,6 +69,7 @@ async function onSearch(e) {
     phrase,
     devices: [$("device").value],
     period: $("period").value,
+    otp: $("otpToggle").checked,
   };
 
   try {
@@ -77,6 +87,7 @@ async function onSearch(e) {
       dynamics: data.dynamics || [],
       top: null,
       windowLabels: (data.window && data.window.labels) || [],
+      otpShare: data.otpShare || null,
     };
     populateRegionSelect();
     renderAll(data);
@@ -98,6 +109,7 @@ function renderAll(data) {
   renderDistChart();
   renderDynamicsChart();
   renderShareChart();
+  renderOtpShareChart();
   renderRegionsTable();
 }
 
@@ -215,8 +227,8 @@ function renderDynamicsChart() {
       datasets: [{
         label: "Показов",
         data: state.dynamics.map((d) => d.count),
-        borderColor: BRAND,
-        backgroundColor: "rgba(82,174,48,.14)",
+        borderColor: VIOLET,
+        backgroundColor: "rgba(126,63,242,.12)",
         fill: true, tension: .3, pointRadius: 3,
       }],
     },
@@ -241,6 +253,54 @@ function renderShareChart() {
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { position: "right", labels: { font: { size: 11 }, boxWidth: 12 } } },
+    },
+  });
+}
+
+// График доли ОТП от общих запросов (только при включённом тумблере «ОТП»).
+function renderOtpShareChart() {
+  const panel = $("otpPanel");
+  const block = state.otpShare;
+  destroy("otp");
+  if (!block || !block.regions || !block.regions.length) {
+    panel.classList.add("hidden");
+    return;
+  }
+  panel.classList.remove("hidden");
+  $("otpTotalShare").textContent = "Суммарная доля ОТП: " + block.totalShare + "%";
+
+  const rows = block.regions.slice(0, 15);
+  charts.otp = new Chart($("otpShareChart"), {
+    type: "bar",
+    data: {
+      labels: rows.map((r) => r.name),
+      datasets: [{
+        label: "Доля ОТП, %",
+        data: rows.map((r) => r.share),
+        backgroundColor: BRAND,
+        borderRadius: 4,
+      }],
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (c) => {
+              const r = rows[c.dataIndex];
+              return r.share + "% (" + fmt(r.otpCount) + " из " + fmt(r.baseCount) + ")";
+            },
+          },
+        },
+      },
+      scales: {
+        x: { beginAtZero: true, title: { display: true, text: "Доля ОТП, %" },
+          ticks: { callback: (v) => v + "%" } },
+        y: { ticks: { autoSkip: false, font: { size: 11 } } },
+      },
     },
   });
 }
