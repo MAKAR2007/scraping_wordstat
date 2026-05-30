@@ -167,7 +167,12 @@ def _demo_distribution(phrase):
     наглядно проверяемой (всё лишнее отсекается в regions.filter_to_subjects).
     """
     idx = build_subject_index({"regions": [RUSSIA_TREE]})
-    base = _seed(phrase)
+    # Демо-режим: запрос «… ОТП» — это доля от исходной фразы, поэтому его
+    # частоты строятся как детерминированная часть базовых (всегда ≤ базовых),
+    # чтобы доля ОТП выглядела правдоподобно (не превышала 100%).
+    is_otp = phrase.endswith(" ОТП")
+    base_phrase = phrase[:-4] if is_otp else phrase
+    base = _seed(base_phrase)
     results = []
 
     # Шум: Россия целиком + зарубежные страны — должны быть отфильтрованы.
@@ -183,6 +188,10 @@ def _demo_distribution(phrase):
     for i, (sid, name) in enumerate(idx["subjects"].items()):
         # Псевдослучайная, но детерминированная по фразе величина.
         val = (base // (i + 3)) % 90000 + (len(name) * 137) % 5000 + 200
+        if is_otp:
+            # Доля ОТП по региону: 5–45% от базовой частоты (детерминированно).
+            frac = (_seed(base_phrase + sid) % 41 + 5) / 100.0
+            val = int(val * frac)
         raw.append((sid, val))
         total += val
         # Заодно добавим строку федерального округа как шум — её отсеют.
