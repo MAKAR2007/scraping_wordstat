@@ -2,7 +2,10 @@
 
 // Состояние последнего ответа — используется для выгрузки и перерисовки графиков.
 let state = { phrase: "", regions: [], dynamics: [], top: { results: [] }, windowLabels: [] };
-let charts = { regions: null, dynamics: null, share: null, otp: null };
+feat/requests-distribution-histogram
+let charts = { regions: null, dynamics: null, share: null, dist: null };
+charts = { regions: null, dynamics: null, share: null, otp: null };
+main
 let topLimit = 15;
 
 const $ = (id) => document.getElementById(id);
@@ -103,6 +106,7 @@ function renderAll(data) {
   $("statLeader").textContent = data.regions && data.regions.length
     ? data.regions[0].name : "—";
   renderRegionsChart();
+  renderDistChart();
   renderDynamicsChart();
   renderShareChart();
   renderOtpShareChart();
@@ -133,6 +137,76 @@ function renderRegionsChart() {
         tooltip: { callbacks: { label: (c) => fmt(c.parsed.x) + " показов" } } },
       scales: { x: { ticks: { callback: (v) => fmt(v) } },
         y: { ticks: { autoSkip: false, font: { size: 11 } } } },
+    },
+  });
+}
+
+// Компактная подпись числа: 12 500 -> «12,5 тыс», 1 200 000 -> «1,2 млн».
+function shortNum(n) {
+  n = n || 0;
+  if (n >= 1e6) return (n / 1e6).toLocaleString("ru-RU", { maximumFractionDigits: 1 }) + " млн";
+  if (n >= 1e3) return (n / 1e3).toLocaleString("ru-RU", { maximumFractionDigits: 1 }) + " тыс";
+  return fmt(n);
+}
+
+// «Красивый» шаг гистограммы (1/2/2.5/5 × 10^k), чтобы границы диапазонов были round.
+function niceStep(rawStep) {
+  if (rawStep <= 0) return 1;
+  const pow = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const frac = rawStep / pow;
+  const nice = frac <= 1 ? 1 : frac <= 2 ? 2 : frac <= 2.5 ? 2.5 : frac <= 5 ? 5 : 10;
+  return nice * pow;
+}
+
+// Гистограмма распределения: число регионов по диапазонам числа показов.
+function buildHistogram(counts) {
+  const max = counts.length ? Math.max(...counts) : 0;
+  if (max <= 0) return { labels: ["0"], values: [counts.length] };
+  const step = niceStep(max / 8);
+  const binCount = Math.max(1, Math.floor(max / step) + 1);
+  const values = new Array(binCount).fill(0);
+  counts.forEach((c) => {
+    const idx = Math.min(binCount - 1, Math.floor(c / step));
+    values[idx] += 1;
+  });
+  const labels = values.map((_, i) =>
+    shortNum(i * step) + "–" + shortNum((i + 1) * step));
+  return { labels, values };
+}
+
+function renderDistChart() {
+  const counts = state.regions.map((r) => r.count || 0);
+  const hist = buildHistogram(counts);
+  destroy("dist");
+  charts.dist = new Chart($("distChart"), {
+    type: "bar",
+    data: {
+      labels: hist.labels,
+      datasets: [{
+        label: "Регионов",
+        data: hist.values,
+        backgroundColor: BRAND,
+        borderRadius: 4,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: (items) => "Показов за месяц: " + items[0].label,
+            label: (c) => fmt(c.parsed.y) + " регион(ов)",
+          },
+        },
+      },
+      scales: {
+        x: { title: { display: true, text: "Диапазон числа показов" },
+          ticks: { font: { size: 11 } } },
+        y: { title: { display: true, text: "Число регионов" },
+          beginAtZero: true, ticks: { precision: 0 } },
+      },
     },
   });
 }
