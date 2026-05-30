@@ -2,7 +2,7 @@
 
 // Состояние последнего ответа — используется для выгрузки и перерисовки графиков.
 let state = { phrase: "", regions: [], dynamics: [], top: { results: [] }, windowLabels: [] };
-let charts = { regions: null, dynamics: null, share: null };
+let charts = { regions: null, dynamics: null, share: null, otp: null };
 let topLimit = 15;
 
 const $ = (id) => document.getElementById(id);
@@ -19,6 +19,10 @@ document.addEventListener("DOMContentLoaded", () => {
   $("exportBtn").addEventListener("click", onExport);
   $("tableFilter").addEventListener("input", renderRegionsTable);
   $("dynRegion").addEventListener("change", refreshDynamics);
+  $("otpToggle").addEventListener("change", () => {
+    // Перезапускаем поиск, чтобы данные пересобрались с/без слова «ОТП».
+    if ($("phrase").value.trim()) $("searchForm").requestSubmit();
+  });
   document.querySelectorAll(".toggle-btn").forEach((b) => {
     b.addEventListener("click", () => {
       document.querySelectorAll(".toggle-btn").forEach((x) => x.classList.remove("active"));
@@ -60,6 +64,7 @@ async function onSearch(e) {
     phrase,
     devices: [$("device").value],
     period: $("period").value,
+    otp: $("otpToggle").checked,
   };
 
   try {
@@ -77,6 +82,7 @@ async function onSearch(e) {
       dynamics: data.dynamics || [],
       top: null,
       windowLabels: (data.window && data.window.labels) || [],
+      otpShare: data.otpShare || null,
     };
     populateRegionSelect();
     renderAll(data);
@@ -97,6 +103,7 @@ function renderAll(data) {
   renderRegionsChart();
   renderDynamicsChart();
   renderShareChart();
+  renderOtpShareChart();
   renderRegionsTable();
 }
 
@@ -170,6 +177,54 @@ function renderShareChart() {
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { position: "right", labels: { font: { size: 11 }, boxWidth: 12 } } },
+    },
+  });
+}
+
+// График доли ОТП от общих запросов (только при включённом тумблере «ОТП»).
+function renderOtpShareChart() {
+  const panel = $("otpPanel");
+  const block = state.otpShare;
+  destroy("otp");
+  if (!block || !block.regions || !block.regions.length) {
+    panel.classList.add("hidden");
+    return;
+  }
+  panel.classList.remove("hidden");
+  $("otpTotalShare").textContent = "Суммарная доля ОТП: " + block.totalShare + "%";
+
+  const rows = block.regions.slice(0, 15);
+  charts.otp = new Chart($("otpShareChart"), {
+    type: "bar",
+    data: {
+      labels: rows.map((r) => r.name),
+      datasets: [{
+        label: "Доля ОТП, %",
+        data: rows.map((r) => r.share),
+        backgroundColor: BRAND,
+        borderRadius: 4,
+      }],
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (c) => {
+              const r = rows[c.dataIndex];
+              return r.share + "% (" + fmt(r.otpCount) + " из " + fmt(r.baseCount) + ")";
+            },
+          },
+        },
+      },
+      scales: {
+        x: { beginAtZero: true, title: { display: true, text: "Доля ОТП, %" },
+          ticks: { callback: (v) => v + "%" } },
+        y: { ticks: { autoSkip: false, font: { size: 11 } } },
+      },
     },
   });
 }
