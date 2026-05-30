@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wordstat — статистика ключевых слов по регионам РФ</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">ОТП</span>
+      <div>
+        <h1>Аналитика Wordstat</h1>
+        <p class="subtitle">Статистика запросов по субъектам Российской Федерации</p>
+      </div>
+    </div>
+    <span id="modeBadge" class="badge badge--demo" title="Режим работы">демо-режим</span>
+  </header>
+
+  <main>
+    <section class="panel search">
+      <form id="searchForm">
+        <div class="field field--grow">
+          <label for="phrase">Ключевая фраза</label>
+          <input id="phrase" type="text" placeholder="например, купить телефон" autocomplete="off" required>
+        </div>
+        <div class="field">
+          <label for="device">Устройства</label>
+          <select id="device">
+            <option value="DEVICE_ALL">Все устройства</option>
+            <option value="DEVICE_DESKTOP">Десктоп</option>
+            <option value="DEVICE_PHONE">Телефон</option>
+            <option value="DEVICE_TABLET">Планшет</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="period">Период динамики</label>
+          <select id="period">
+            <option value="PERIOD_MONTHLY">По месяцам</option>
+            <option value="PERIOD_WEEKLY">По неделям</option>
+            <option value="PERIOD_DAILY">По дням</option>
+          </select>
+        </div>
+        <button type="submit" id="searchBtn" class="btn btn--primary">Искать</button>
+      </form>
+      <p class="hint">Данные строго разбиваются по самостоятельным регионам РФ. Федеральные округа исключены.</p>
+    </section>
+
+    <div id="error" class="error hidden"></div>
+    <div id="loader" class="loader hidden"><span class="spinner"></span> Загрузка данных…</div>
+
+    <div id="results" class="hidden">
+      <section class="stats">
+        <div class="stat-card">
+          <span class="stat-label">Всего показов (субъекты РФ)</span>
+          <span id="statTotal" class="stat-value">—</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Регионов в выборке</span>
+          <span id="statRegions" class="stat-value">—</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Лидер по показам</span>
+          <span id="statLeader" class="stat-value">—</span>
+        </div>
+        <div class="stat-card stat-card--action">
+          <button id="exportBtn" class="btn btn--export">⬇ Выгрузить в Excel</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Распределение по регионам РФ</h2>
+          <div class="toggle">
+            <button class="toggle-btn active" data-top="15">Топ-15</button>
+            <button class="toggle-btn" data-top="30">Топ-30</button>
+            <button class="toggle-btn" data-top="0">Все</button>
+          </div>
+        </div>
+        <div class="chart-box chart-box--tall"><canvas id="regionsChart"></canvas></div>
+      </section>
+
+      <div class="grid-2">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Динамика частоты</h2>
+            <select id="dynRegion" class="filter filter--select" title="Регион для динамики"></select>
+          </div>
+          <p class="chart-note">Последние 12 полных месяцев</p>
+          <div class="chart-box"><canvas id="dynamicsChart"></canvas></div>
+        </section>
+        <section class="panel">
+          <h2>Доля регионов (топ-10)</h2>
+          <div class="chart-box"><canvas id="shareChart"></canvas></div>
+        </section>
+      </div>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Таблица регионов</h2>
+          <input id="tableFilter" type="text" class="filter" placeholder="Фильтр по названию…">
+        </div>
+        <div class="table-wrap">
+          <table id="regionsTable">
+            <thead>
+              <tr><th>№</th><th>Регион</th><th>Показов</th><th>Доля, %</th><th>Индекс</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <span>Источник: Yandex Wordstat API · Разбивка по субъектам РФ без федеральных округов</span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:aistudio.yandex.ru)",
+      "WebSearch",
+      "WebFetch(domain:yandex.cloud)",
+      "Bash(npm --version)",
+      "PowerShell($n = \\(Get-Command node -ErrorAction SilentlyContinue\\); if \\($n\\) { node --version; npm --version } else { \"node-not-found\" }; \"---python---\"; $p = \\(Get-Command python -ErrorAction SilentlyContinue\\); if \\($p\\) { python --version } else { \"python-not-found\" })",
+      "PowerShell(python -m pip --version)",
+      "PowerShell(python -c \"import openpyxl; print\\('openpyxl', openpyxl.__version__\\)\" 2>&1)",
+      "PowerShell(python -c \"import xlsxwriter; print\\('xlsxwriter', xlsxwriter.__version__\\)\" 2>&1)",
+      "PowerShell(python -c \"import requests; print\\('requests', requests.__version__\\)\" 2>&1)",
+      "PowerShell(python -c \"import flask; print\\('flask', flask.__version__\\)\" 2>&1)",
+      "PowerShell(\"---\")",
+      "PowerShell($env:PYTHONUTF8=\"1\"; Start-Process python -ArgumentList \"app.py\" -WorkingDirectory \"C:\\\\Users\\\\mishe\\\\Documents\\\\scraper\" -WindowStyle Hidden; Start-Sleep -Seconds 3; \"started\")",
+      "mcp__Claude_Preview__preview_start"
+    ]
+  }
+}
