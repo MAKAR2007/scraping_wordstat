@@ -198,7 +198,7 @@ def _build_workbook(phrase, regions, dynamics, window, matrix):
     matrix = matrix or {}
 
     wb = Workbook()
-    header_fill = PatternFill("solid", fgColor="52AE30")   # фирменный зелёный ОТП
+    header_fill = PatternFill("solid", fgColor="7E3FF2")   # фирменный фиолетовый ОТП
     header_font = Font(bold=True, color="FFFFFF")
 
     def style_header(ws, row, ncols):
@@ -294,4 +294,5 @@ def _safe_name(phrase):
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    port = int(os.environ.get("PORT", "5000"))
+    app.run(host="127.0.0.1", port=port, debug=False)
