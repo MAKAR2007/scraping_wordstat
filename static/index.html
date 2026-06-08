@@ -3,7 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Wordstat — статистика ключевых слов по регионам РФ</title>
+  <title>ОТП · Аналитика Wordstat по регионам РФ</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
@@ -13,7 +16,7 @@
       <span class="logo">ОТП</span>
       <div>
         <h1>Аналитика Wordstat</h1>
-        <p class="subtitle">Статистика запросов по субъектам Российской Федерации</p>
+        <p class="subtitle">Спрос по субъектам РФ · рынок и доля бренда ОТП</p>
       </div>
     </div>
     <span id="modeBadge" class="badge badge--demo" title="Режим работы">демо-режим</span>
@@ -23,8 +26,8 @@
     <section class="panel search">
       <form id="searchForm">
         <div class="field field--grow">
-          <label for="phrase">Ключевая фраза</label>
-          <input id="phrase" type="text" placeholder="например, купить телефон" autocomplete="off" required>
+          <label for="phrase">Ключевая фраза (рынок)</label>
+          <input id="phrase" type="text" placeholder="например, кредит наличными" autocomplete="off" required>
         </div>
         <div class="field">
           <label for="device">Устройства</label>
@@ -43,9 +46,10 @@
             <option value="PERIOD_DAILY">По дням</option>
           </select>
         </div>
-        <button type="submit" id="searchBtn" class="btn btn--primary">Искать</button>
+        <button type="submit" id="searchBtn" class="btn btn--primary">Анализировать</button>
       </form>
-      <p class="hint">Данные строго разбиваются по самостоятельным регионам РФ. Федеральные округа исключены.</p>
+      <p class="hint">«Рынок» — частота вашей фразы. «ОТП» — та же фраза со словом <b>ОТП</b>.
+        Данные строго по субъектам РФ; федеральные округа исключены.</p>
     </section>
 
     <div id="error" class="error hidden"></div>
@@ -53,17 +57,20 @@
 
     <div id="results" class="hidden">
       <section class="stats">
-        <div class="stat-card">
-          <span class="stat-label">Всего показов (субъекты РФ)</span>
-          <span id="statTotal" class="stat-value">—</span>
+        <div class="stat-card stat-card--market">
+          <span class="stat-label">Всего показов · рынок</span>
+          <span id="statMarket" class="stat-value">—</span>
+          <span class="stat-foot">по всем субъектам РФ за месяц</span>
         </div>
-        <div class="stat-card">
-          <span class="stat-label">Регионов в выборке</span>
-          <span id="statRegions" class="stat-value">—</span>
+        <div class="stat-card stat-card--otp">
+          <span class="stat-label" id="statOtpLabel">Доля ОТП от общих запросов</span>
+          <span id="statOtpShare" class="stat-value">—</span>
+          <span class="stat-foot" id="statOtpFoot">показов с «ОТП» от рынка</span>
         </div>
         <div class="stat-card">
           <span class="stat-label">Лидер по показам</span>
-          <span id="statLeader" class="stat-value">—</span>
+          <span id="statLeader" class="stat-value stat-value--sm">—</span>
+          <span class="stat-foot">регион №1 по рынку</span>
         </div>
         <div class="stat-card stat-card--action">
           <button id="exportBtn" class="btn btn--export">⬇ Выгрузить в Excel</button>
@@ -72,11 +79,13 @@
 
       <section class="panel">
         <div class="panel-head">
-          <h2>Распределение по регионам РФ</h2>
+          <div>
+            <h2>Распределение по регионам РФ</h2>
+            <p class="chart-note">Два столбца на регион: <span class="key key--market">рынок</span> и <span class="key key--otp">ОТП</span></p>
+          </div>
           <div class="toggle">
             <button class="toggle-btn active" data-top="15">Топ-15</button>
             <button class="toggle-btn" data-top="30">Топ-30</button>
-            <button class="toggle-btn" data-top="0">Все</button>
           </div>
         </div>
         <div class="chart-box chart-box--tall"><canvas id="regionsChart"></canvas></div>
@@ -85,15 +94,29 @@
       <div class="grid-2">
         <section class="panel">
           <div class="panel-head">
-            <h2>Динамика частоты</h2>
+            <div>
+              <h2>Динамика частоты</h2>
+              <p class="chart-note"><span class="key key--otp">ОТП</span> — левая ось, <span class="key key--market">рынок</span> — правая ось</p>
+            </div>
             <select id="dynRegion" class="filter filter--select" title="Регион для динамики"></select>
           </div>
-          <p class="chart-note">Последние 12 полных месяцев</p>
           <div class="chart-box"><canvas id="dynamicsChart"></canvas></div>
         </section>
         <section class="panel">
-          <h2>Доля регионов (топ-10)</h2>
-          <div class="chart-box"><canvas id="shareChart"></canvas></div>
+          <h2>Распределение числа запросов</h2>
+          <p class="chart-note">Сколько регионов попадает в каждый диапазон показов (рынок)</p>
+          <div class="chart-box"><canvas id="distChart"></canvas></div>
+        </section>
+      </div>
+
+      <div class="grid-2">
+        <section class="panel">
+          <h2>Доля регионов · <span class="accent-otp">ОТП</span></h2>
+          <div class="chart-box"><canvas id="shareOtpChart"></canvas></div>
+        </section>
+        <section class="panel">
+          <h2>Доля регионов · <span class="accent-market">рынок</span></h2>
+          <div class="chart-box"><canvas id="shareMarketChart"></canvas></div>
         </section>
       </div>
 
@@ -105,7 +128,11 @@
         <div class="table-wrap">
           <table id="regionsTable">
             <thead>
-              <tr><th>№</th><th>Регион</th><th>Показов</th><th>Доля, %</th><th>Индекс</th></tr>
+              <tr>
+                <th>№</th><th>Регион</th>
+                <th>Рынок</th><th>ОТП</th>
+                <th>Доля ОТП, %</th><th>Индекс</th>
+              </tr>
             </thead>
             <tbody></tbody>
           </table>

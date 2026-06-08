@@ -1,17 +1,35 @@
 "use strict";
 
 // Состояние последнего ответа — используется для выгрузки и перерисовки графиков.
-let state = { phrase: "", regions: [], dynamics: [], top: { results: [] }, windowLabels: [] };
-let charts = { regions: null, dynamics: null, share: null };
+let state = {
+  marketPhrase: "",
+  otpPhrase: "",
+  regions: [],
+  dyn: { labels: [], market: [], otp: [] },
+  totals: {},
+};
+let charts = { regions: null, dynamics: null, dist: null, shareOtp: null, shareMarket: null };
 let topLimit = 15;
 
 const $ = (id) => document.getElementById(id);
-const fmt = (n) => (n || 0).toLocaleString("ru-RU");
+const fmt = (n) => Math.round(n || 0).toLocaleString("ru-RU");
 
-const BRAND = "#52AE30";
-// Зелёная палитра в фирменном стиле ОТП Банка.
-const PALETTE = ["#52AE30", "#0a7d3c", "#8DCB6B", "#2f7d4f", "#b6e0a0",
-  "#1f9d55", "#3fae6a", "#6fae3a", "#0f7a4a", "#9ccf7a"];
+// Семантика цветов: рынок = салатовый, ОТП = фиолетовый, акцент = оранжевый.
+const C = {
+  market: "#7AB829", marketSoft: "rgba(122,184,41,.16)",
+  otp: "#6C4CF1", otpSoft: "rgba(108,76,241,.18)",
+  orange: "#FF7A1A",
+};
+const MARKET_COLORS = ["#7AB829", "#8CC63F", "#69A220", "#A0D356", "#5F9A1E",
+  "#4F851A", "#93CE4D", "#B4DD79", "#74B226", "#86C23A"];
+const OTP_COLORS = ["#6C4CF1", "#7E5BF6", "#9277F8", "#5A3CD0", "#A78EF9",
+  "#4B30B8", "#8466F4", "#B9A6FB", "#6E51E8", "#5544C9"];
+const OTHERS_COLOR = "#C7CCD8";
+
+if (window.Chart) {
+  Chart.defaults.font.family = "Manrope, -apple-system, Segoe UI, Roboto, sans-serif";
+  Chart.defaults.color = "#717787";
+}
 
 document.addEventListener("DOMContentLoaded", () => {
   checkStatus();
@@ -19,6 +37,14 @@ document.addEventListener("DOMContentLoaded", () => {
   $("exportBtn").addEventListener("click", onExport);
   $("tableFilter").addEventListener("input", renderRegionsTable);
   $("dynRegion").addEventListener("change", refreshDynamics);
+  // Устройства влияют на все данные → полный пересчёт.
+  $("device").addEventListener("change", () => {
+    if (state.marketPhrase) $("searchForm").requestSubmit();
+  });
+  // Период влияет только на динамику → лёгкий перезапрос.
+  $("period").addEventListener("change", () => {
+    if (state.marketPhrase) refreshDynamics();
+  });
   document.querySelectorAll(".toggle-btn").forEach((b) => {
     b.addEventListener("click", () => {
       document.querySelectorAll(".toggle-btn").forEach((x) => x.classList.remove("active"));
@@ -31,8 +57,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 async function checkStatus() {
   try {
-    const r = await fetch("/api/status");
-    const s = await r.json();
+    const s = await (await fetch("/api/status")).json();
     const badge = $("modeBadge");
     if (s.demo) {
       badge.textContent = "демо-режим";
@@ -56,30 +81,28 @@ async function onSearch(e) {
   $("loader").classList.remove("hidden");
   $("searchBtn").disabled = true;
 
-  const body = {
-    phrase,
-    devices: [$("device").value],
-    period: $("period").value,
-  };
-
   try {
     const resp = await fetch("/api/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        phrase,
+        devices: [$("device").value],
+        period: $("period").value,
+      }),
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || "Ошибка запроса");
 
     state = {
-      phrase: data.phrase,
+      marketPhrase: data.marketPhrase,
+      otpPhrase: data.otpPhrase,
       regions: data.regions || [],
-      dynamics: data.dynamics || [],
-      top: null,
-      windowLabels: (data.window && data.window.labels) || [],
+      dyn: data.dynamics || { labels: [], market: [], otp: [] },
+      totals: data.totals || {},
     };
     populateRegionSelect();
-    renderAll(data);
+    renderAll();
     $("results").classList.remove("hidden");
   } catch (err) {
     showError(err.message);
@@ -89,91 +112,159 @@ async function onSearch(e) {
   }
 }
 
-function renderAll(data) {
-  $("statTotal").textContent = fmt(data.totalCount);
-  $("statRegions").textContent = fmt(data.regionsCount);
-  $("statLeader").textContent = data.regions && data.regions.length
-    ? data.regions[0].name : "—";
+function renderAll() {
+  const t = state.totals;
+  $("statMarket").textContent = fmt(t.market);
+  $("statOtpShare").textContent = (t.otpShare != null ? t.otpShare : 0) + "%";
+  $("statOtpLabel").textContent = "Доля «" + state.otpPhrase + "» от общих";
+  $("statLeader").textContent = t.leader || "—";
   renderRegionsChart();
   renderDynamicsChart();
-  renderShareChart();
+  renderDistChart();
+  renderShareChart("shareOtp", "otp", OTP_COLORS);
+  renderShareChart("shareMarket", "market", MARKET_COLORS);
   renderRegionsTable();
 }
 
 function destroy(name) { if (charts[name]) { charts[name].destroy(); charts[name] = null; } }
 
+// --------------------------------------------------- регионы: рынок + ОТП --
 function renderRegionsChart() {
-  const rows = topLimit > 0 ? state.regions.slice(0, topLimit) : state.regions;
+  const rows = state.regions.slice(0, topLimit);
+  // Высота под количество строк, чтобы подписи не наезжали.
+  $("regionsChart").parentElement.style.height = Math.max(420, rows.length * 27) + "px";
   destroy("regions");
   charts.regions = new Chart($("regionsChart"), {
     type: "bar",
     data: {
       labels: rows.map((r) => r.name),
-      datasets: [{
-        label: "Показов за месяц",
-        data: rows.map((r) => r.count),
-        backgroundColor: BRAND,
-        borderRadius: 4,
-      }],
+      datasets: [
+        { key: "market", label: "Рынок", data: rows.map((r) => r.market),
+          backgroundColor: C.market, borderRadius: 4, categoryPercentage: .76, barPercentage: .92 },
+        { key: "otp", label: "ОТП", data: rows.map((r) => r.otp),
+          backgroundColor: C.otp, borderRadius: 4, categoryPercentage: .76, barPercentage: .92 },
+      ],
     },
     options: {
       indexAxis: "y",
       responsive: true,
       maintainAspectRatio: false,
-      plugins: { legend: { display: false },
-        tooltip: { callbacks: { label: (c) => fmt(c.parsed.x) + " показов" } } },
-      scales: { x: { ticks: { callback: (v) => fmt(v) } },
-        y: { ticks: { autoSkip: false, font: { size: 11 } } } },
+      plugins: {
+        legend: { display: true, position: "top", labels: { boxWidth: 12, font: { weight: 700 } } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const r = rows[ctx.dataIndex];
+              return ctx.dataset.key === "market"
+                ? "Рынок: " + fmt(r.market) + " показов"
+                : "ОТП: " + fmt(r.otp) + " показов · доля ОТП " + r.penetration + "%";
+            },
+          },
+        },
+      },
+      scales: {
+        x: { ticks: { callback: shortNum } },
+        y: { ticks: { autoSkip: false, font: { size: 11 } } },
+      },
     },
   });
 }
 
-function dynamicsLabels() {
-  if (state.windowLabels && state.windowLabels.length === state.dynamics.length) {
-    return state.windowLabels;
-  }
-  return state.dynamics.map((d) => (d.date || "").slice(0, 7));
-}
-
+// ------------------------------------------- динамика: 2 оси (ОТП + рынок) --
 function renderDynamicsChart() {
   destroy("dynamics");
   charts.dynamics = new Chart($("dynamicsChart"), {
     type: "line",
     data: {
-      labels: dynamicsLabels(),
-      datasets: [{
-        label: "Показов",
-        data: state.dynamics.map((d) => d.count),
-        borderColor: BRAND,
-        backgroundColor: "rgba(82,174,48,.14)",
-        fill: true, tension: .3, pointRadius: 3,
-      }],
+      labels: state.dyn.labels,
+      datasets: [
+        { label: "ОТП", data: state.dyn.otp, yAxisID: "yOtp",
+          borderColor: C.otp, backgroundColor: C.otpSoft, fill: true,
+          tension: .35, pointRadius: 2, borderWidth: 2.5 },
+        { label: "Рынок", data: state.dyn.market, yAxisID: "yMarket",
+          borderColor: C.market, backgroundColor: C.marketSoft, fill: false,
+          tension: .35, pointRadius: 2, borderWidth: 2.5 },
+      ],
     },
     options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: { y: { ticks: { callback: (v) => fmt(v) } } },
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: true, position: "top", labels: { boxWidth: 12, font: { weight: 700 } } },
+        tooltip: { callbacks: { label: (c) => " " + c.dataset.label + ": " + fmt(c.parsed.y) } },
+      },
+      scales: {
+        yOtp: { position: "left", title: { display: true, text: "ОТП", color: C.otp },
+          ticks: { callback: shortNum, color: C.otp }, grid: { color: "#f1f1f8" } },
+        yMarket: { position: "right", title: { display: true, text: "Рынок", color: C.market },
+          ticks: { callback: shortNum, color: C.market }, grid: { drawOnChartArea: false } },
+        x: { ticks: { maxRotation: 0, autoSkip: true, font: { size: 11 } } },
+      },
     },
   });
 }
 
-function renderShareChart() {
-  const rows = state.regions.slice(0, 10);
-  destroy("share");
-  charts.share = new Chart($("shareChart"), {
-    type: "doughnut",
+// ----------------------------------- гистограмма распределения по диапазонам --
+function renderDistChart() {
+  const { labels, data } = buildHistogram(state.regions.map((r) => r.market));
+  destroy("dist");
+  charts.dist = new Chart($("distChart"), {
+    type: "bar",
     data: {
-      labels: rows.map((r) => r.name),
-      datasets: [{ data: rows.map((r) => r.count),
-        backgroundColor: PALETTE, borderWidth: 1, borderColor: "#fff" }],
+      labels,
+      datasets: [{ label: "Регионов в диапазоне", data, backgroundColor: C.orange, borderRadius: 5 }],
     },
     options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { position: "right", labels: { font: { size: 11 }, boxWidth: 12 } } },
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (c) => c.parsed.y + " регион(ов)" } },
+      },
+      scales: {
+        x: { ticks: { font: { size: 10 } }, grid: { display: false } },
+        y: { beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: "число регионов" } },
+      },
     },
   });
 }
 
+// ----------------------------------- пай-чарты: ОТП и рынок + «остальные» --
+function renderShareChart(name, key, colors) {
+  const canvas = name === "shareOtp" ? "shareOtpChart" : "shareMarketChart";
+  const sorted = [...state.regions].sort((a, b) => b[key] - a[key]);
+  const top = sorted.slice(0, 10);
+  const restSum = sorted.slice(10).reduce((s, r) => s + (r[key] || 0), 0);
+  const labels = top.map((r) => r.name);
+  const data = top.map((r) => r[key]);
+  const bg = colors.slice(0, top.length);
+  if (restSum > 0) { labels.push("Остальные регионы"); data.push(restSum); bg.push(OTHERS_COLOR); }
+
+  destroy(name);
+  charts[name] = new Chart($(canvas), {
+    type: "doughnut",
+    data: { labels, datasets: [{ data, backgroundColor: bg, borderWidth: 2, borderColor: "#fff" }] },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: "58%",
+      plugins: {
+        legend: { position: "right", labels: { font: { size: 11 }, boxWidth: 12, padding: 8 } },
+        tooltip: {
+          callbacks: {
+            label: (c) => {
+              const total = c.dataset.data.reduce((s, v) => s + v, 0) || 1;
+              return " " + c.label + ": " + fmt(c.parsed) + " (" + (c.parsed / total * 100).toFixed(1) + "%)";
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+// --------------------------------------------------------------- таблица --
 function renderRegionsTable() {
   const q = $("tableFilter").value.trim().toLowerCase();
   const tbody = $("regionsTable").querySelector("tbody");
@@ -182,9 +273,12 @@ function renderRegionsTable() {
     .filter((r) => !q || r.name.toLowerCase().includes(q))
     .forEach((r, i) => {
       const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${i + 1}</td><td>${r.name}</td>` +
-        `<td>${fmt(r.count)}</td><td>${(r.share || 0).toFixed(2)}</td>` +
-        `<td>${Math.round(r.affinityIndex || 0)}</td>`;
+      tr.innerHTML =
+        `<td class="num">${i + 1}</td><td>${r.name}</td>` +
+        `<td class="num">${fmt(r.market)}</td>` +
+        `<td class="num tag-otp">${fmt(r.otp)}</td>` +
+        `<td class="num"><span class="tag-pen">${(r.penetration || 0).toFixed(1)}%</span></td>` +
+        `<td class="num">${Math.round(r.affinityIndex || 0)}</td>`;
       tbody.appendChild(tr);
     });
 }
@@ -203,27 +297,25 @@ function populateRegionSelect() {
     o.textContent = r.name;
     sel.appendChild(o);
   });
-  // Сохраняем выбор, если регион всё ещё присутствует.
   sel.value = [...sel.options].some((o) => o.value === prev) ? prev : "ALL";
 }
 
 async function refreshDynamics() {
-  if (!state.phrase) return;
-  const region = $("dynRegion").value || "ALL";
+  if (!state.marketPhrase) return;
   try {
     const resp = await fetch("/api/dynamics", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        phrase: state.phrase,
-        region,
+        phrase: state.marketPhrase,
+        region: $("dynRegion").value || "ALL",
         devices: [$("device").value],
+        period: $("period").value,
       }),
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || "Ошибка запроса динамики");
-    state.dynamics = data.dynamics || [];
-    state.windowLabels = (data.window && data.window.labels) || state.windowLabels;
+    state.dyn = data.dynamics || state.dyn;
     renderDynamicsChart();
   } catch (err) {
     showError(err.message);
@@ -233,19 +325,25 @@ async function refreshDynamics() {
 async function onExport() {
   const btn = $("exportBtn");
   btn.disabled = true;
+  const label = btn.textContent;
   btn.textContent = "Формирование…";
   try {
     const resp = await fetch("/api/export", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(state),
+      body: JSON.stringify({
+        phrase: state.marketPhrase,
+        otpPhrase: state.otpPhrase,
+        regions: state.regions,
+        dynamics: state.dyn,
+      }),
     });
     if (!resp.ok) throw new Error("Не удалось сформировать файл");
     const blob = await resp.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "wordstat_" + (state.phrase || "export").replace(/\s+/g, "_") + ".xlsx";
+    a.download = "wordstat_" + (state.marketPhrase || "export").replace(/\s+/g, "_") + ".xlsx";
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -254,8 +352,39 @@ async function onExport() {
     showError(err.message);
   } finally {
     btn.disabled = false;
-    btn.textContent = "⬇ Выгрузить в Excel";
+    btn.textContent = label;
   }
+}
+
+// --------------------------------------------------------------- helpers --
+function shortNum(n) {
+  n = Number(n) || 0;
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace(".0", "") + " млн";
+  if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1).replace(".0", "") + " тыс";
+  return String(Math.round(n));
+}
+
+function niceStep(raw) {
+  if (raw <= 0) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(raw)));
+  const f = raw / p;
+  const nf = f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10;
+  return nf * p;
+}
+
+function buildHistogram(counts) {
+  if (!counts.length) return { labels: [], data: [] };
+  const max = Math.max(...counts);
+  const step = niceStep(max / 8) || 1;
+  const bins = Math.max(1, Math.ceil((max + 1) / step));
+  const data = new Array(bins).fill(0);
+  counts.forEach((c) => {
+    let i = Math.floor(c / step);
+    if (i >= bins) i = bins - 1;
+    data[i]++;
+  });
+  const labels = data.map((_, i) => shortNum(i * step) + "–" + shortNum((i + 1) * step));
+  return { labels, data };
 }
 
 function showError(msg) {

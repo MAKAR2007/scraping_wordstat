@@ -54,5 +54,43 @@ def last_full_months(today=None, n=12):
     from_date = "%04d-%02d-01T00:00:00Z" % (sy, sm)
     to_date = "%04d-%02d-%02dT00:00:00Z" % (y, m, _last_day(y, m))
 
-    return {"months": months, "labels": labels,
+    return {"months": months, "labels": labels, "period": "PERIOD_MONTHLY",
             "fromDate": from_date, "toDate": to_date}
+
+
+def period_axis(period="PERIOD_MONTHLY", today=None, n_weeks=13, n_days=30):
+    """Ось динамики для выбранного периода (месяц/неделя/день).
+
+    Возвращает ту же структуру, что и last_full_months: ключи (months),
+    подписи (labels), period и окно дат. Для недель/дней берём последние
+    завершённые периоды (текущий, незавершённый, не включаем).
+    """
+    period = (period or "PERIOD_MONTHLY").upper()
+    if not period.startswith("PERIOD_"):
+        period = "PERIOD_" + period
+    today = today or dt.date.today()
+
+    if period == "PERIOD_WEEKLY":
+        end = today - dt.timedelta(days=today.weekday() + 1)   # последнее воскресенье
+        keys, labels = [], []
+        for i in range(n_weeks - 1, -1, -1):
+            ws = end - dt.timedelta(days=7 * i + 6)            # понедельник недели
+            we = end - dt.timedelta(days=7 * i)                # воскресенье недели
+            keys.append(ws.isoformat())
+            labels.append("%d–%d %s" % (ws.day, we.day, RU_MONTHS[we.month]))
+        return {"months": keys, "labels": labels, "period": period,
+                "fromDate": keys[0] + "T00:00:00Z",
+                "toDate": end.isoformat() + "T00:00:00Z"}
+
+    if period == "PERIOD_DAILY":
+        end = today - dt.timedelta(days=1)                     # последний полный день
+        keys, labels = [], []
+        for i in range(n_days - 1, -1, -1):
+            d = end - dt.timedelta(days=i)
+            keys.append(d.isoformat())
+            labels.append("%d %s" % (d.day, RU_MONTHS[d.month]))
+        return {"months": keys, "labels": labels, "period": period,
+                "fromDate": keys[0] + "T00:00:00Z",
+                "toDate": end.isoformat() + "T00:00:00Z"}
+
+    return last_full_months(today)

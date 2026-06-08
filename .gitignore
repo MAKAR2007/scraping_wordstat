@@ -1,0 +1,13 @@
+# секреты и окружение
+.env
+.env.*
+*.bak
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ОС
+.DS_Store
