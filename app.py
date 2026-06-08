@@ -33,6 +33,7 @@ def _load_dotenv():
 
 _load_dotenv()
 
+import dataset
 from regions import all_subject_ids, build_subject_index, filter_to_subjects
 from yandex_client import WordstatClient, YandexError
 
@@ -65,6 +66,12 @@ def status():
     return jsonify({"demo": client.demo_mode})
 
 
+@app.route("/api/products")
+def products():
+    """Фразы с реальными данными по тоталу РФ (из ручной выгрузки CSV)."""
+    return jsonify({"phrases": dataset.known_phrases()})
+
+
 @app.route("/api/search", methods=["POST"])
 def search():
     payload = request.get_json(force=True, silent=True) or {}
@@ -81,6 +88,12 @@ def search():
     client = WordstatClient()
     index = get_subject_index(client)
     all_ids = all_subject_ids(index)
+
+    # Реальные тоталы РФ из ручной выгрузки (CSV) — для известных продуктов.
+    # Это «источник правды» для рынка/ОТП/доли; регионы масштабируются под тотал.
+    ds_key = dataset.lookup(phrase) if client.demo_mode else None
+    if ds_key:
+        return _search_from_dataset(ds_key, index)
 
     try:
         # 1. Распределение по регионам РФ: рынок (база) и запрос «… ОТП».
@@ -103,7 +116,7 @@ def search():
 
     total_market = sum(r["market"] for r in regions)
     total_otp = sum(r["otp"] for r in regions)
-    otp_share = round(total_otp / total_market * 100, 2) if total_market else 0.0
+    otp_share = round(total_otp / total_market * 100, 3) if total_market else 0.0
 
     return jsonify({
         "marketPhrase": market_phrase,
@@ -145,6 +158,12 @@ def dynamics_for_region():
     client = WordstatClient()
     index = get_subject_index(client)
     all_ids = all_subject_ids(index)
+
+    # Известный продукт из CSV — отдаём реальный месячный ряд (масштаб по региону).
+    ds_key = dataset.lookup(phrase) if client.demo_mode else None
+    if ds_key:
+        return _dynamics_from_dataset(ds_key, region_id, index)
+
     try:
         market_dyn = _normalize_dynamics(client.dynamics_window(
             phrase, axis, region_id=region_id,
@@ -190,6 +209,58 @@ def export_excel():
 
 
 # ----------------------------------------------------------- helpers ---
+def _search_from_dataset(ds_key, index):
+    """Ответ /api/search на реальных тоталах РФ (CSV). Регионы масштабируются
+    так, что их сумма = реальный тотал; доля ОТП = ОТП / рынок."""
+    win = dataset.window(ds_key, 12)
+    market_total = win["marketLatest"]
+    otp_total = win["otpLatest"]
+    market_regions, otp_regions = dataset.regional_split(
+        ds_key, market_total, otp_total, index)
+    regions = _merge_regions(market_regions, otp_regions)
+    otp_share = round(otp_total / market_total * 100, 3) if market_total else 0.0
+    product = dataset.product(ds_key)
+    return jsonify({
+        "marketPhrase": product["base"],
+        "otpPhrase": product["otpName"],
+        "demo": True,
+        "source": "csv",
+        "totals": {
+            "market": market_total,
+            "otp": otp_total,
+            "otpShare": otp_share,
+            "leader": regions[0]["name"] if regions else "—",
+            "monthLabel": win["labels"][-1] if win["labels"] else "",
+        },
+        "regions": regions,
+        "dynamics": {"labels": win["labels"], "market": win["market"], "otp": win["otp"]},
+        "window": {"months": win["keys"], "labels": win["labels"],
+                   "period": "PERIOD_MONTHLY"},
+        "excluded": {
+            "federalDistricts": len(index["federal_districts"]),
+            "note": "Тотал РФ по ручной выгрузке (CSV); регионы смоделированы под тотал.",
+        },
+    })
+
+
+def _dynamics_from_dataset(ds_key, region_id, index):
+    """Месячная динамика (рынок + ОТП) из CSV; для конкретного субъекта ряд
+    масштабируется на долю региона в тотале."""
+    win = dataset.window(ds_key, 12)
+    market, otp = win["market"], win["otp"]
+    if region_id != "ALL":
+        fm, fo = dataset.region_fractions(
+            ds_key, region_id, win["marketLatest"], win["otpLatest"], index)
+        market = [int(round(v * fm)) for v in market]
+        otp = [int(round(v * fo)) for v in otp]
+    return jsonify({
+        "region": region_id,
+        "dynamics": {"labels": win["labels"], "market": market, "otp": otp},
+        "window": {"months": win["keys"], "labels": win["labels"],
+                   "period": "PERIOD_MONTHLY"},
+    })
+
+
 def _merge_regions(market_regions, otp_regions):
     """Сводит распределения рынка и ОТП в строки по субъектам РФ.
 

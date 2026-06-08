@@ -27,7 +27,8 @@
       <form id="searchForm">
         <div class="field field--grow">
           <label for="phrase">Ключевая фраза (рынок)</label>
-          <input id="phrase" type="text" placeholder="например, кредит наличными" autocomplete="off" required>
+          <input id="phrase" type="text" list="phraseList" placeholder="например, Дебетовые карты" autocomplete="off" required>
+          <datalist id="phraseList"></datalist>
         </div>
         <div class="field">
           <label for="device">Устройства</label>
@@ -48,8 +49,9 @@
         </div>
         <button type="submit" id="searchBtn" class="btn btn--primary">Анализировать</button>
       </form>
-      <p class="hint">«Рынок» — частота вашей фразы. «ОТП» — та же фраза со словом <b>ОТП</b>.
-        Данные строго по субъектам РФ; федеральные округа исключены.</p>
+      <p class="hint">«Рынок» — частота вашей фразы. «ОТП» — та же фраза со словом <b>ОТП</b>,
+        доля ОТП = ОТП ÷ рынок. Для продуктов <span id="knownHint">из выгрузки</span>
+        тоталы РФ берутся из реальных данных; иначе — демо-режим.</p>
     </section>
 
     <div id="error" class="error hidden"></div>
@@ -60,7 +62,7 @@
         <div class="stat-card stat-card--market">
           <span class="stat-label">Всего показов · рынок</span>
           <span id="statMarket" class="stat-value">—</span>
-          <span class="stat-foot">по всем субъектам РФ за месяц</span>
+          <span class="stat-foot" id="statMarketFoot">по всем субъектам РФ за месяц</span>
         </div>
         <div class="stat-card stat-card--otp">
           <span class="stat-label" id="statOtpLabel">Доля ОТП от общих запросов</span>

@@ -13,6 +13,12 @@ let topLimit = 15;
 
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => Math.round(n || 0).toLocaleString("ru-RU");
+// Проценты с адекватной точностью: малые доли — 3 знака (как в выгрузке).
+const fmtPct = (v) => {
+  v = Number(v) || 0;
+  const dec = v < 1 ? 3 : 2;
+  return v.toFixed(dec).replace(".", ",") + "%";
+};
 
 // Семантика цветов: рынок = салатовый, ОТП = фиолетовый, акцент = оранжевый.
 const C = {
@@ -33,6 +39,7 @@ if (window.Chart) {
 
 document.addEventListener("DOMContentLoaded", () => {
   checkStatus();
+  loadProducts();
   $("searchForm").addEventListener("submit", onSearch);
   $("exportBtn").addEventListener("click", onExport);
   $("tableFilter").addEventListener("input", renderRegionsTable);
@@ -71,6 +78,15 @@ async function checkStatus() {
   } catch (e) { /* игнорируем */ }
 }
 
+async function loadProducts() {
+  try {
+    const { phrases } = await (await fetch("/api/products")).json();
+    if (!phrases || !phrases.length) return;
+    $("phraseList").innerHTML = phrases.map((p) => `<option value="${p}">`).join("");
+    $("knownHint").textContent = phrases.join(", ");
+  } catch (e) { /* игнорируем */ }
+}
+
 async function onSearch(e) {
   e.preventDefault();
   const phrase = $("phrase").value.trim();
@@ -100,6 +116,7 @@ async function onSearch(e) {
       regions: data.regions || [],
       dyn: data.dynamics || { labels: [], market: [], otp: [] },
       totals: data.totals || {},
+      source: data.source || null,
     };
     populateRegionSelect();
     renderAll();
@@ -114,9 +131,15 @@ async function onSearch(e) {
 
 function renderAll() {
   const t = state.totals;
+  const month = t.monthLabel ? " · " + t.monthLabel : "";
   $("statMarket").textContent = fmt(t.market);
-  $("statOtpShare").textContent = (t.otpShare != null ? t.otpShare : 0) + "%";
+  $("statMarketFoot").textContent = (state.source === "csv"
+    ? "тотал по РФ" : "по всем субъектам РФ") + " за месяц" + month;
+  // Заголовочная доля — 3 знака, как в выгрузке (1,555% / 0,082%).
+  $("statOtpShare").textContent = (Number(t.otpShare) || 0).toFixed(3).replace(".", ",") + "%";
   $("statOtpLabel").textContent = "Доля «" + state.otpPhrase + "» от общих";
+  // Явное соотношение для сверки: ОТП ÷ рынок.
+  $("statOtpFoot").textContent = fmt(t.otp) + " ÷ " + fmt(t.market) + month;
   $("statLeader").textContent = t.leader || "—";
   renderRegionsChart();
   renderDynamicsChart();
@@ -157,7 +180,7 @@ function renderRegionsChart() {
               const r = rows[ctx.dataIndex];
               return ctx.dataset.key === "market"
                 ? "Рынок: " + fmt(r.market) + " показов"
-                : "ОТП: " + fmt(r.otp) + " показов · доля ОТП " + r.penetration + "%";
+                : "ОТП: " + fmt(r.otp) + " показов · доля ОТП " + fmtPct(r.penetration);
             },
           },
         },
@@ -277,7 +300,7 @@ function renderRegionsTable() {
         `<td class="num">${i + 1}</td><td>${r.name}</td>` +
         `<td class="num">${fmt(r.market)}</td>` +
         `<td class="num tag-otp">${fmt(r.otp)}</td>` +
-        `<td class="num"><span class="tag-pen">${(r.penetration || 0).toFixed(1)}%</span></td>` +
+        `<td class="num"><span class="tag-pen">${fmtPct(r.penetration)}</span></td>` +
         `<td class="num">${Math.round(r.affinityIndex || 0)}</td>`;
       tbody.appendChild(tr);
     });

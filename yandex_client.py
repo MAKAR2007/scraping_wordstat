@@ -208,9 +208,10 @@ def _demo_distribution(phrase, devices=None):
         # Базовая (рыночная) частота — детерминированная по фразе и региону.
         val = (base // (i + 3)) % 90000 + (len(name) * 137) % 5000 + 200
         if is_otp:
-            # Доля ОТП по региону: 5–45% от рыночной частоты (детерминированно).
-            frac = (_seed(base_phrase + sid) % 41 + 5) / 100.0
-            val = int(val * frac)
+            # Доля ОТП по региону: 0.3–3.0% от рыночной частоты (как в реальности —
+            # бренд занимает малую долю рынка; детерминированно по фразе/региону).
+            frac = (_seed(base_phrase + sid) % 28 + 3) / 1000.0
+            val = max(0, int(val * frac))
         val = max(1, int(val * factor))
         raw.append((sid, val))
         total += val
@@ -249,7 +250,7 @@ def _demo_series(seed_key, keys, devices=None):
     base = _seed(base_key)
     amp = base % 9000 + 3000          # амплитуда сезонных колебаний
     level = base % 40000 + 8000       # базовый уровень
-    scale = ((_seed(base_key + "otp") % 31 + 8) / 100.0) if is_otp else 1.0
+    scale = ((_seed(base_key + "otp") % 28 + 3) / 1000.0) if is_otp else 1.0
     factor = _device_factor(devices)
     results = []
     for i, key in enumerate(keys):
