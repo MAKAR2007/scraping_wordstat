@@ -144,6 +144,44 @@ def _ordered_keys():
     return [k for _, k in _cache["month_cols"]]
 
 
+def _label(key):
+    y, mo = int(key[:4]), int(key[5:7])
+    return "%s %d" % (_RU_LABEL[mo], y)
+
+
+def history(key):
+    """Полный месячный ряд продукта (все месяцы, где есть рынок)."""
+    p = _load()[key]
+    keys = [k for k in _ordered_keys() if p["market"].get(k) is not None]
+    return {
+        "keys": keys,
+        "labels": [_label(k) for k in keys],
+        "market": [int(p["market"].get(k) or 0) for k in keys],
+        "otp": [int(p["otp"].get(k) or 0) for k in keys],
+    }
+
+
+def year_totals_from_series(keys, market, otp):
+    """(год, сумма рынка, сумма ОТП) за последний ПОЛНЫЙ календарный год.
+
+    Полный год = есть все 12 месяцев. Если полных нет — берём последний год.
+    """
+    by_year = {}
+    for i, k in enumerate(keys):
+        by_year.setdefault(int(k[:4]), []).append(i)
+    full = [y for y in sorted(by_year) if len(by_year[y]) >= 12]
+    year = full[-1] if full else (max(by_year) if by_year else None)
+    if year is None:
+        return (None, 0, 0)
+    idxs = by_year[year]
+    return (year, sum(market[i] for i in idxs), sum(otp[i] for i in idxs))
+
+
+def year_totals(key):
+    h = history(key)
+    return year_totals_from_series(h["keys"], h["market"], h["otp"])
+
+
 def window(key, n=12):
     """Последние n месяцев (где есть рынок) для продукта.
 

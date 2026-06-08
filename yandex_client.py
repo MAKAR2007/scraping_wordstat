@@ -133,6 +133,19 @@ class WordstatClient:
             regions=regions, devices=devices,
         )
 
+    def monthly_history(self, phrase, keys, devices=None):
+        """Месячный ряд частот по списку ключей ['YYYY-MM', ...] (агрегат РФ).
+
+        Для неизвестных фраз — синтетика; в рабочем режиме — помесячный API.
+        """
+        win = {"months": keys, "period": "PERIOD_MONTHLY",
+               "fromDate": keys[0] + "-01T00:00:00Z",
+               "toDate": keys[-1] + "-28T00:00:00Z"}
+        res = self.dynamics_window(phrase, win, region_id="ALL",
+                                   all_region_ids=None, devices=devices)
+        by = {(r.get("date") or "")[:7]: _int(r.get("count")) for r in res.get("results") or []}
+        return [by.get(k, 0) for k in keys]
+
     def monthly_matrix(self, phrase, region_ids, window, devices=None):
         """Матрица «регион × месяц» за окно последних 12 полных месяцев.
 

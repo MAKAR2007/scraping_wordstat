@@ -83,7 +83,9 @@ main { max-width: 1220px; margin: 26px auto 8px; padding: 0 24px; }
   padding: 22px 24px;
   margin-bottom: 20px;
   box-shadow: var(--shadow);
+  transition: box-shadow .2s ease, transform .2s ease;
 }
+.panel:hover { box-shadow: var(--shadow-lg); transform: translateY(-1px); }
 .panel h2 { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: -.2px; }
 .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
 .chart-note { margin: 5px 0 0; color: var(--muted); font-size: 12px; font-weight: 500; }
@@ -155,6 +157,11 @@ input:focus, select:focus { border-color: var(--violet); box-shadow: 0 0 0 4px v
 .stat-card--otp .stat-value { color: var(--violet-dark); }
 .stat-card--market .stat-value { color: var(--brand-dark); }
 .stat-foot { color: var(--muted); font-size: 11px; font-weight: 500; }
+/* Динамика: рост — зелёный, падение — красный. */
+.growth-up { color: #18a558 !important; }
+.growth-down { color: #e23b2e !important; }
+.growth-up::before { content: "▲ "; font-size: .7em; vertical-align: middle; }
+.growth-down::before { content: "▼ "; font-size: .7em; vertical-align: middle; }
 
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 

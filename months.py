@@ -58,6 +58,22 @@ def last_full_months(today=None, n=12):
             "fromDate": from_date, "toDate": to_date}
 
 
+def last_n_months(n=48, today=None):
+    """Ключи и подписи последних n полных месяцев (для синтетической истории)."""
+    today = today or dt.date.today()
+    end = today.replace(day=1) - dt.timedelta(days=1)   # последний полный месяц
+    y, m = end.year, end.month
+    keys = []
+    for i in range(n - 1, -1, -1):
+        yy, mm = y, m - i
+        while mm <= 0:
+            mm += 12
+            yy -= 1
+        keys.append("%04d-%02d" % (yy, mm))
+    labels = ["%s %d" % (RU_MONTHS[int(k[5:7])], int(k[:4])) for k in keys]
+    return {"keys": keys, "labels": labels}
+
+
 def period_axis(period="PERIOD_MONTHLY", today=None, n_weeks=13, n_days=30):
     """Ось динамики для выбранного периода (месяц/неделя/день).
 

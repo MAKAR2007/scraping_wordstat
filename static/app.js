@@ -1,36 +1,41 @@
 "use strict";
 
-// Состояние последнего ответа — используется для выгрузки и перерисовки графиков.
+// Состояние последнего ответа. hist — полная месячная история по всем регионам;
+// dynHist — история для графика динамики (может быть по выбранному региону).
 let state = {
   marketPhrase: "",
   otpPhrase: "",
   regions: [],
-  dyn: { labels: [], market: [], otp: [] },
+  hist: { keys: [], labels: [], market: [], otp: [] },
+  dynHist: { keys: [], labels: [], market: [], otp: [] },
   totals: {},
 };
-let charts = { regions: null, dynamics: null, dist: null, shareOtp: null, shareMarket: null };
+let charts = {
+  regions: null, dynamics: null, penetration: null, growthIndex: null,
+  dist: null, seasonality: null, shareOtp: null, shareMarket: null,
+};
 let topLimit = 15;
 
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => Math.round(n || 0).toLocaleString("ru-RU");
-// Проценты с адекватной точностью: малые доли — 3 знака (как в выгрузке).
 const fmtPct = (v) => {
   v = Number(v) || 0;
-  const dec = v < 1 ? 3 : 2;
-  return v.toFixed(dec).replace(".", ",") + "%";
+  return v.toFixed(v < 1 ? 3 : 2).replace(".", ",") + "%";
 };
 
-// Семантика цветов: рынок = салатовый, ОТП = фиолетовый, акцент = оранжевый.
+// Семантика: рынок = салат, ОТП = фиолетовый, акцент = оранжевый.
 const C = {
   market: "#7AB829", marketSoft: "rgba(122,184,41,.16)",
   otp: "#6C4CF1", otpSoft: "rgba(108,76,241,.18)",
   orange: "#FF7A1A",
 };
-const MARKET_COLORS = ["#7AB829", "#8CC63F", "#69A220", "#A0D356", "#5F9A1E",
-  "#4F851A", "#93CE4D", "#B4DD79", "#74B226", "#86C23A"];
-const OTP_COLORS = ["#6C4CF1", "#7E5BF6", "#9277F8", "#5A3CD0", "#A78EF9",
-  "#4B30B8", "#8466F4", "#B9A6FB", "#6E51E8", "#5544C9"];
+// Категориальная палитра — у каждого региона свой различимый цвет.
+const PIE_COLORS = ["#6C4CF1", "#7AB829", "#FF7A1A", "#22B8CF", "#E8467C",
+  "#F5B301", "#2F9E6E", "#9B5DE5", "#3D7BF0", "#FF6B6B"];
 const OTHERS_COLOR = "#C7CCD8";
+const SEASON_COLORS = ["#D9CDF6", "#B6A6FB", "#7AB829", "#FF9E45", "#6C4CF1"];
+const MONTH_ABBR = ["янв", "фев", "мар", "апр", "май", "июн",
+  "июл", "авг", "сен", "окт", "ноя", "дек"];
 
 if (window.Chart) {
   Chart.defaults.font.family = "Manrope, -apple-system, Segoe UI, Roboto, sans-serif";
@@ -39,7 +44,6 @@ if (window.Chart) {
 
 document.addEventListener("DOMContentLoaded", () => {
   checkStatus();
-  loadProducts();
   $("searchForm").addEventListener("submit", onSearch);
   $("exportBtn").addEventListener("click", onExport);
   $("tableFilter").addEventListener("input", renderRegionsTable);
@@ -48,9 +52,9 @@ document.addEventListener("DOMContentLoaded", () => {
   $("device").addEventListener("change", () => {
     if (state.marketPhrase) $("searchForm").requestSubmit();
   });
-  // Период влияет только на динамику → лёгкий перезапрос.
+  // Период — это агрегация уже загруженной истории, без обращения к серверу.
   $("period").addEventListener("change", () => {
-    if (state.marketPhrase) refreshDynamics();
+    if (state.marketPhrase) { renderDynamicsChart(); renderKpiBlocks(); }
   });
   document.querySelectorAll(".toggle-btn").forEach((b) => {
     b.addEventListener("click", () => {
@@ -78,15 +82,6 @@ async function checkStatus() {
   } catch (e) { /* игнорируем */ }
 }
 
-async function loadProducts() {
-  try {
-    const { phrases } = await (await fetch("/api/products")).json();
-    if (!phrases || !phrases.length) return;
-    $("phraseList").innerHTML = phrases.map((p) => `<option value="${p}">`).join("");
-    $("knownHint").textContent = phrases.join(", ");
-  } catch (e) { /* игнорируем */ }
-}
-
 async function onSearch(e) {
   e.preventDefault();
   const phrase = $("phrase").value.trim();
@@ -101,22 +96,19 @@ async function onSearch(e) {
     const resp = await fetch("/api/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        phrase,
-        devices: [$("device").value],
-        period: $("period").value,
-      }),
+      body: JSON.stringify({ phrase, devices: [$("device").value] }),
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || "Ошибка запроса");
 
+    const hist = data.dynamics || { keys: [], labels: [], market: [], otp: [] };
     state = {
       marketPhrase: data.marketPhrase,
       otpPhrase: data.otpPhrase,
       regions: data.regions || [],
-      dyn: data.dynamics || { labels: [], market: [], otp: [] },
+      hist,
+      dynHist: hist,
       totals: data.totals || {},
-      source: data.source || null,
     };
     populateRegionSelect();
     renderAll();
@@ -131,30 +123,103 @@ async function onSearch(e) {
 
 function renderAll() {
   const t = state.totals;
-  const month = t.monthLabel ? " · " + t.monthLabel : "";
   $("statMarket").textContent = fmt(t.market);
-  $("statMarketFoot").textContent = (state.source === "csv"
-    ? "тотал по РФ" : "по всем субъектам РФ") + " за месяц" + month;
-  // Заголовочная доля — 3 знака, как в выгрузке (1,555% / 0,082%).
+  $("statMarketFoot").textContent = "тотал по РФ за " + (t.year || "год");
   $("statOtpShare").textContent = (Number(t.otpShare) || 0).toFixed(3).replace(".", ",") + "%";
   $("statOtpLabel").textContent = "Доля «" + state.otpPhrase + "» от общих";
-  // Явное соотношение для сверки: ОТП ÷ рынок.
-  $("statOtpFoot").textContent = fmt(t.otp) + " ÷ " + fmt(t.market) + month;
+  $("statOtpFoot").textContent = fmt(t.otp) + " ÷ " + fmt(t.market) + " · " + (t.year || "");
   $("statLeader").textContent = t.leader || "—";
+
+  renderKpiBlocks();
   renderRegionsChart();
   renderDynamicsChart();
+  renderPenetrationChart();
+  renderGrowthIndexChart();
   renderDistChart();
-  renderShareChart("shareOtp", "otp", OTP_COLORS);
-  renderShareChart("shareMarket", "market", MARKET_COLORS);
+  renderSeasonalityChart();
+  renderShareChart("shareOtp", "otp");
+  renderShareChart("shareMarket", "market");
   renderRegionsTable();
 }
 
 function destroy(name) { if (charts[name]) { charts[name].destroy(); charts[name] = null; } }
 
+// ------------------------------------------------- агрегация по периоду ----
+function periodKey() { return $("period").value || "month"; }
+
+function aggregate(hist, period) {
+  if (period === "month") {
+    return { labels: hist.labels.slice(), market: hist.market.slice(),
+      otp: hist.otp.slice(), counts: hist.keys.map(() => 1) };
+  }
+  const order = [], map = {};
+  hist.keys.forEach((k, i) => {
+    const y = k.slice(0, 4), m = parseInt(k.slice(5, 7), 10);
+    const id = period === "year" ? y : y + "Q" + Math.ceil(m / 3);
+    const label = period === "year" ? y : Math.ceil(m / 3) + " кв. " + y;
+    if (!(id in map)) { map[id] = { market: 0, otp: 0, count: 0, label }; order.push(id); }
+    map[id].market += hist.market[i];
+    map[id].otp += hist.otp[i];
+    map[id].count += 1;
+  });
+  return {
+    labels: order.map((id) => map[id].label),
+    market: order.map((id) => map[id].market),
+    otp: order.map((id) => map[id].otp),
+    counts: order.map((id) => map[id].count),
+  };
+}
+
+function growthDetail(agg, period, field) {
+  const need = period === "year" ? 12 : period === "quarter" ? 3 : 1;
+  const idx = [];
+  for (let i = 0; i < agg.counts.length; i++) if (agg.counts[i] >= need) idx.push(i);
+  if (idx.length < 2) return null;
+  const i1 = idx[idx.length - 2], i2 = idx[idx.length - 1];
+  const prev = agg[field][i1], last = agg[field][i2];
+  if (!prev) return null;
+  return { pct: (last - prev) / prev * 100, prevLabel: agg.labels[i1], lastLabel: agg.labels[i2] };
+}
+
+function peakInfo(hist, field) {
+  const arr = hist[field];
+  let hi = -Infinity, hidx = -1;
+  arr.forEach((v, i) => { if (v > hi) { hi = v; hidx = i; } });
+  const start = Math.max(0, arr.length - 12);
+  let lo = -Infinity, lidx = -1;
+  for (let i = start; i < arr.length; i++) if (arr[i] > lo) { lo = arr[i]; lidx = i; }
+  return {
+    histLabel: hidx >= 0 ? hist.labels[hidx] : "—", histVal: hi > 0 ? hi : 0,
+    yearLabel: lidx >= 0 ? hist.labels[lidx] : "—", yearVal: lo > 0 ? lo : 0,
+  };
+}
+
+function renderKpiBlocks() {
+  const period = periodKey();
+  const agg = aggregate(state.hist, period);
+  [["Market", "market"], ["Otp", "otp"]].forEach(([suf, field]) => {
+    const el = $("growth" + suf), foot = $("growth" + suf + "Foot");
+    const d = growthDetail(agg, period, field);
+    if (!d) {
+      el.textContent = "—"; el.className = "stat-value"; foot.textContent = "недостаточно данных";
+      return;
+    }
+    const up = d.pct >= 0;
+    el.textContent = (up ? "+" : "−") + Math.abs(d.pct).toFixed(1).replace(".", ",") + " %";
+    el.className = "stat-value " + (up ? "growth-up" : "growth-down");
+    foot.textContent = d.lastLabel + " к " + d.prevLabel;
+  });
+  const pm = peakInfo(state.hist, "market");
+  $("peakMarket").textContent = pm.histLabel;
+  $("peakMarketFoot").textContent = "истор. " + shortNum(pm.histVal) + " · посл. год: " + pm.yearLabel;
+  const po = peakInfo(state.hist, "otp");
+  $("peakOtp").textContent = po.histLabel;
+  $("peakOtpFoot").textContent = "истор. " + shortNum(po.histVal) + " · посл. год: " + po.yearLabel;
+}
+
 // --------------------------------------------------- регионы: рынок + ОТП --
 function renderRegionsChart() {
   const rows = state.regions.slice(0, topLimit);
-  // Высота под количество строк, чтобы подписи не наезжали.
   $("regionsChart").parentElement.style.height = Math.max(420, rows.length * 27) + "px";
   destroy("regions");
   charts.regions = new Chart($("regionsChart"), {
@@ -169,49 +234,38 @@ function renderRegionsChart() {
       ],
     },
     options: {
-      indexAxis: "y",
-      responsive: true,
-      maintainAspectRatio: false,
+      indexAxis: "y", responsive: true, maintainAspectRatio: false,
       plugins: {
         legend: { display: true, position: "top", labels: { boxWidth: 12, font: { weight: 700 } } },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => {
-              const r = rows[ctx.dataIndex];
-              return ctx.dataset.key === "market"
-                ? "Рынок: " + fmt(r.market) + " показов"
-                : "ОТП: " + fmt(r.otp) + " показов · доля ОТП " + fmtPct(r.penetration);
-            },
-          },
-        },
+        tooltip: { callbacks: { label: (ctx) => {
+          const r = rows[ctx.dataIndex];
+          return ctx.dataset.key === "market"
+            ? "Рынок: " + fmt(r.market)
+            : "ОТП: " + fmt(r.otp) + " · доля ОТП " + fmtPct(r.penetration);
+        } } },
       },
-      scales: {
-        x: { ticks: { callback: shortNum } },
-        y: { ticks: { autoSkip: false, font: { size: 11 } } },
-      },
+      scales: { x: { ticks: { callback: shortNum } }, y: { ticks: { autoSkip: false, font: { size: 11 } } } },
     },
   });
 }
 
 // ------------------------------------------- динамика: 2 оси (ОТП + рынок) --
 function renderDynamicsChart() {
+  const agg = aggregate(state.dynHist, periodKey());
   destroy("dynamics");
   charts.dynamics = new Chart($("dynamicsChart"), {
     type: "line",
     data: {
-      labels: state.dyn.labels,
+      labels: agg.labels,
       datasets: [
-        { label: "ОТП", data: state.dyn.otp, yAxisID: "yOtp",
-          borderColor: C.otp, backgroundColor: C.otpSoft, fill: true,
-          tension: .35, pointRadius: 2, borderWidth: 2.5 },
-        { label: "Рынок", data: state.dyn.market, yAxisID: "yMarket",
-          borderColor: C.market, backgroundColor: C.marketSoft, fill: false,
-          tension: .35, pointRadius: 2, borderWidth: 2.5 },
+        { label: "ОТП", data: agg.otp, yAxisID: "yOtp", borderColor: C.otp,
+          backgroundColor: C.otpSoft, fill: true, tension: .35, pointRadius: 0, borderWidth: 2.5 },
+        { label: "Рынок", data: agg.market, yAxisID: "yMarket", borderColor: C.market,
+          backgroundColor: C.marketSoft, fill: false, tension: .35, pointRadius: 0, borderWidth: 2.5 },
       ],
     },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
+      responsive: true, maintainAspectRatio: false,
       interaction: { mode: "index", intersect: false },
       plugins: {
         legend: { display: true, position: "top", labels: { boxWidth: 12, font: { weight: 700 } } },
@@ -222,7 +276,65 @@ function renderDynamicsChart() {
           ticks: { callback: shortNum, color: C.otp }, grid: { color: "#f1f1f8" } },
         yMarket: { position: "right", title: { display: true, text: "Рынок", color: C.market },
           ticks: { callback: shortNum, color: C.market }, grid: { drawOnChartArea: false } },
-        x: { ticks: { maxRotation: 0, autoSkip: true, font: { size: 11 } } },
+        x: { ticks: { maxRotation: 0, autoSkip: true, font: { size: 10 } } },
+      },
+    },
+  });
+}
+
+// ------------------------------------------- доля ОТП во времени (тренд) ----
+function renderPenetrationChart() {
+  const h = state.hist;
+  const share = h.market.map((m, i) => (m ? h.otp[i] / m * 100 : 0));
+  destroy("penetration");
+  charts.penetration = new Chart($("penetrationChart"), {
+    type: "line",
+    data: {
+      labels: h.labels,
+      datasets: [{ label: "Доля ОТП, %", data: share, borderColor: C.otp,
+        backgroundColor: C.otpSoft, fill: true, tension: .35, pointRadius: 0, borderWidth: 2.5 }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false },
+        tooltip: { callbacks: { label: (c) => " доля ОТП: " + c.parsed.y.toFixed(3).replace(".", ",") + "%" } } },
+      scales: {
+        x: { ticks: { maxRotation: 0, autoSkip: true, font: { size: 10 } } },
+        y: { ticks: { callback: (v) => v.toFixed(1).replace(".", ",") + "%" } },
+      },
+    },
+  });
+}
+
+// --------------------------------------- индекс роста: рынок vs ОТП (=100) --
+function renderGrowthIndexChart() {
+  const h = state.hist;
+  const i0m = h.market.findIndex((v) => v > 0);
+  const i0o = h.otp.findIndex((v) => v > 0);
+  const baseM = i0m >= 0 ? h.market[i0m] : 0;
+  const baseO = i0o >= 0 ? h.otp[i0o] : 0;
+  const idxM = h.market.map((v) => (baseM ? v / baseM * 100 : null));
+  const idxO = h.otp.map((v) => (baseO ? v / baseO * 100 : null));
+  destroy("growthIndex");
+  charts.growthIndex = new Chart($("growthIndexChart"), {
+    type: "line",
+    data: {
+      labels: h.labels,
+      datasets: [
+        { label: "Рынок", data: idxM, borderColor: C.market, backgroundColor: "transparent",
+          tension: .35, pointRadius: 0, borderWidth: 2.5, spanGaps: true },
+        { label: "ОТП", data: idxO, borderColor: C.otp, backgroundColor: "transparent",
+          tension: .35, pointRadius: 0, borderWidth: 2.5, spanGaps: true },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { display: true, position: "top", labels: { boxWidth: 12, font: { weight: 700 } } },
+        tooltip: { callbacks: { label: (c) => " " + c.dataset.label + ": " + Math.round(c.parsed.y) } } },
+      scales: {
+        x: { ticks: { maxRotation: 0, autoSkip: true, font: { size: 10 } } },
+        y: { ticks: { callback: (v) => Math.round(v) } },
       },
     },
   });
@@ -234,17 +346,10 @@ function renderDistChart() {
   destroy("dist");
   charts.dist = new Chart($("distChart"), {
     type: "bar",
-    data: {
-      labels,
-      datasets: [{ label: "Регионов в диапазоне", data, backgroundColor: C.orange, borderRadius: 5 }],
-    },
+    data: { labels, datasets: [{ label: "Регионов в диапазоне", data, backgroundColor: C.orange, borderRadius: 5 }] },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: { callbacks: { label: (c) => c.parsed.y + " регион(ов)" } },
-      },
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => c.parsed.y + " регион(ов)" } } },
       scales: {
         x: { ticks: { font: { size: 10 } }, grid: { display: false } },
         y: { beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: "число регионов" } },
@@ -253,15 +358,45 @@ function renderDistChart() {
   });
 }
 
+// ------------------------------------------------ сезонность рынка по годам --
+function renderSeasonalityChart() {
+  const h = state.hist;
+  const years = {};
+  h.keys.forEach((k, i) => {
+    const y = k.slice(0, 4), m = parseInt(k.slice(5, 7), 10) - 1;
+    (years[y] = years[y] || new Array(12).fill(null))[m] = h.market[i];
+  });
+  const ys = Object.keys(years).sort();
+  const recent = ys.slice(-5);
+  const datasets = recent.map((y, idx) => ({
+    label: y, data: years[y],
+    borderColor: SEASON_COLORS[idx % SEASON_COLORS.length],
+    backgroundColor: "transparent", tension: .35, pointRadius: 0, spanGaps: true,
+    borderWidth: idx === recent.length - 1 ? 3 : 1.8,
+  }));
+  destroy("seasonality");
+  charts.seasonality = new Chart($("seasonalityChart"), {
+    type: "line",
+    data: { labels: MONTH_ABBR, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { display: true, position: "top", labels: { boxWidth: 12, font: { weight: 700 } } },
+        tooltip: { callbacks: { label: (c) => " " + c.dataset.label + ": " + fmt(c.parsed.y) } } },
+      scales: { y: { ticks: { callback: shortNum } } },
+    },
+  });
+}
+
 // ----------------------------------- пай-чарты: ОТП и рынок + «остальные» --
-function renderShareChart(name, key, colors) {
+function renderShareChart(name, key) {
   const canvas = name === "shareOtp" ? "shareOtpChart" : "shareMarketChart";
   const sorted = [...state.regions].sort((a, b) => b[key] - a[key]);
   const top = sorted.slice(0, 10);
   const restSum = sorted.slice(10).reduce((s, r) => s + (r[key] || 0), 0);
   const labels = top.map((r) => r.name);
   const data = top.map((r) => r[key]);
-  const bg = colors.slice(0, top.length);
+  const bg = PIE_COLORS.slice(0, top.length);
   if (restSum > 0) { labels.push("Остальные регионы"); data.push(restSum); bg.push(OTHERS_COLOR); }
 
   destroy(name);
@@ -269,19 +404,13 @@ function renderShareChart(name, key, colors) {
     type: "doughnut",
     data: { labels, datasets: [{ data, backgroundColor: bg, borderWidth: 2, borderColor: "#fff" }] },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      cutout: "58%",
+      responsive: true, maintainAspectRatio: false, cutout: "58%",
       plugins: {
-        legend: { position: "right", labels: { font: { size: 11 }, boxWidth: 12, padding: 8 } },
-        tooltip: {
-          callbacks: {
-            label: (c) => {
-              const total = c.dataset.data.reduce((s, v) => s + v, 0) || 1;
-              return " " + c.label + ": " + fmt(c.parsed) + " (" + (c.parsed / total * 100).toFixed(1) + "%)";
-            },
-          },
-        },
+        legend: { position: "right", labels: { font: { size: 11 }, boxWidth: 12, padding: 7 } },
+        tooltip: { callbacks: { label: (c) => {
+          const total = c.dataset.data.reduce((s, v) => s + v, 0) || 1;
+          return " " + c.label + ": " + fmt(c.parsed) + " (" + (c.parsed / total * 100).toFixed(1) + "%)";
+        } } },
       },
     },
   });
@@ -333,12 +462,11 @@ async function refreshDynamics() {
         phrase: state.marketPhrase,
         region: $("dynRegion").value || "ALL",
         devices: [$("device").value],
-        period: $("period").value,
       }),
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || "Ошибка запроса динамики");
-    state.dyn = data.dynamics || state.dyn;
+    state.dynHist = data.dynamics || state.dynHist;
     renderDynamicsChart();
   } catch (err) {
     showError(err.message);
@@ -358,7 +486,7 @@ async function onExport() {
         phrase: state.marketPhrase,
         otpPhrase: state.otpPhrase,
         regions: state.regions,
-        dynamics: state.dyn,
+        dynamics: state.hist,
       }),
     });
     if (!resp.ok) throw new Error("Не удалось сформировать файл");

@@ -12,7 +12,7 @@ import sys
 
 from flask import Flask, jsonify, request, send_file
 
-from months import last_full_months, period_axis
+from months import last_full_months, last_n_months
 
 
 def _load_dotenv():
@@ -34,7 +34,7 @@ def _load_dotenv():
 _load_dotenv()
 
 import dataset
-from regions import all_subject_ids, build_subject_index, filter_to_subjects
+from regions import build_subject_index
 from yandex_client import WordstatClient, YandexError
 
 app = Flask(__name__, static_folder="static", static_url_path="")
@@ -80,58 +80,34 @@ def search():
         return jsonify({"error": "Не задана ключевая фраза"}), 400
 
     devices = payload.get("devices") or None
-    period = payload.get("period") or "PERIOD_MONTHLY"
-    market_phrase = phrase
-    otp_phrase = phrase + " ОТП"
-    axis = period_axis(period)
-
     client = WordstatClient()
     index = get_subject_index(client)
-    all_ids = all_subject_ids(index)
-
-    # Реальные тоталы РФ из ручной выгрузки (CSV) — для известных продуктов.
-    # Это «источник правды» для рынка/ОТП/доли; регионы масштабируются под тотал.
-    ds_key = dataset.lookup(phrase) if client.demo_mode else None
-    if ds_key:
-        return _search_from_dataset(ds_key, index)
 
     try:
-        # 1. Распределение по регионам РФ: рынок (база) и запрос «… ОТП».
-        market_regions = filter_to_subjects(
-            client.get_regions_distribution(market_phrase, devices=devices).get("results"), index)
-        otp_regions = filter_to_subjects(
-            client.get_regions_distribution(otp_phrase, devices=devices).get("results"), index)
-        regions = _merge_regions(market_regions, otp_regions)
-
-        # 2. Динамика частоты (рынок + ОТП) за выбранный период по всем субъектам РФ.
-        market_dyn = _normalize_dynamics(client.dynamics_window(
-            market_phrase, axis, region_id="ALL",
-            all_region_ids=all_ids, devices=devices).get("results"))
-        otp_dyn = _normalize_dynamics(client.dynamics_window(
-            otp_phrase, axis, region_id="ALL",
-            all_region_ids=all_ids, devices=devices).get("results"))
-
+        key, base, otp_name, hist, year, market_year, otp_year = \
+            _phrase_history(phrase, devices, client, index)
     except YandexError as exc:
         return jsonify({"error": str(exc)}), 502
 
-    total_market = sum(r["market"] for r in regions)
-    total_otp = sum(r["otp"] for r in regions)
-    otp_share = round(total_otp / total_market * 100, 3) if total_market else 0.0
+    # Регионы масштабируются так, что их сумма = годовой тотал РФ.
+    market_regions, otp_regions = dataset.regional_split(
+        key, market_year, otp_year, index)
+    regions = _merge_regions(market_regions, otp_regions)
+    otp_share = round(otp_year / market_year * 100, 3) if market_year else 0.0
 
     return jsonify({
-        "marketPhrase": market_phrase,
-        "otpPhrase": otp_phrase,
+        "marketPhrase": base,
+        "otpPhrase": otp_name,
         "demo": client.demo_mode,
         "totals": {
-            "market": total_market,
-            "otp": total_otp,
+            "market": market_year,
+            "otp": otp_year,
             "otpShare": otp_share,
             "leader": regions[0]["name"] if regions else "—",
+            "year": year,
         },
         "regions": regions,
-        "dynamics": _pack_dynamics(axis, market_dyn, otp_dyn),
-        "window": {"months": axis["months"], "labels": axis["labels"],
-                   "period": axis["period"]},
+        "dynamics": hist,            # полная месячная история {keys,labels,market,otp}
         "excluded": {
             "federalDistricts": len(index["federal_districts"]),
             "note": "Федеральные округа и зарубежные регионы исключены.",
@@ -141,9 +117,10 @@ def search():
 
 @app.route("/api/dynamics", methods=["POST"])
 def dynamics_for_region():
-    """Динамика частоты (рынок + ОТП) за выбранный период и регион.
+    """Полная месячная история (рынок + ОТП) по выбранному региону.
 
-    region == "ALL" — агрегат по всем субъектам РФ; иначе — один субъект.
+    region == "ALL" — агрегат по всем субъектам РФ; иначе — один субъект
+    (ряд масштабируется на долю региона в годовом тотале).
     """
     payload = request.get_json(force=True, silent=True) or {}
     phrase = (payload.get("phrase") or "").strip()
@@ -151,35 +128,24 @@ def dynamics_for_region():
         return jsonify({"error": "Не задана ключевая фраза"}), 400
     region_id = str(payload.get("region") or "ALL")
     devices = payload.get("devices") or None
-    period = payload.get("period") or "PERIOD_MONTHLY"
-    otp_phrase = phrase + " ОТП"
-    axis = period_axis(period)
 
     client = WordstatClient()
     index = get_subject_index(client)
-    all_ids = all_subject_ids(index)
-
-    # Известный продукт из CSV — отдаём реальный месячный ряд (масштаб по региону).
-    ds_key = dataset.lookup(phrase) if client.demo_mode else None
-    if ds_key:
-        return _dynamics_from_dataset(ds_key, region_id, index)
-
     try:
-        market_dyn = _normalize_dynamics(client.dynamics_window(
-            phrase, axis, region_id=region_id,
-            all_region_ids=all_ids, devices=devices).get("results"))
-        otp_dyn = _normalize_dynamics(client.dynamics_window(
-            otp_phrase, axis, region_id=region_id,
-            all_region_ids=all_ids, devices=devices).get("results"))
+        key, _base, _otp, hist, _year, market_year, otp_year = \
+            _phrase_history(phrase, devices, client, index)
     except YandexError as exc:
         return jsonify({"error": str(exc)}), 502
 
-    return jsonify({
-        "region": region_id,
-        "dynamics": _pack_dynamics(axis, market_dyn, otp_dyn),
-        "window": {"months": axis["months"], "labels": axis["labels"],
-                   "period": axis["period"]},
-    })
+    if region_id != "ALL":
+        fm, fo = dataset.region_fractions(
+            key, region_id, market_year, otp_year, index)
+        hist = {
+            "keys": hist["keys"], "labels": hist["labels"],
+            "market": [int(round(v * fm)) for v in hist["market"]],
+            "otp": [int(round(v * fo)) for v in hist["otp"]],
+        }
+    return jsonify({"region": region_id, "dynamics": hist})
 
 
 @app.route("/api/export", methods=["POST"])
@@ -209,56 +175,28 @@ def export_excel():
 
 
 # ----------------------------------------------------------- helpers ---
-def _search_from_dataset(ds_key, index):
-    """Ответ /api/search на реальных тоталах РФ (CSV). Регионы масштабируются
-    так, что их сумма = реальный тотал; доля ОТП = ОТП / рынок."""
-    win = dataset.window(ds_key, 12)
-    market_total = win["marketLatest"]
-    otp_total = win["otpLatest"]
-    market_regions, otp_regions = dataset.regional_split(
-        ds_key, market_total, otp_total, index)
-    regions = _merge_regions(market_regions, otp_regions)
-    otp_share = round(otp_total / market_total * 100, 3) if market_total else 0.0
-    product = dataset.product(ds_key)
-    return jsonify({
-        "marketPhrase": product["base"],
-        "otpPhrase": product["otpName"],
-        "demo": True,
-        "source": "csv",
-        "totals": {
-            "market": market_total,
-            "otp": otp_total,
-            "otpShare": otp_share,
-            "leader": regions[0]["name"] if regions else "—",
-            "monthLabel": win["labels"][-1] if win["labels"] else "",
-        },
-        "regions": regions,
-        "dynamics": {"labels": win["labels"], "market": win["market"], "otp": win["otp"]},
-        "window": {"months": win["keys"], "labels": win["labels"],
-                   "period": "PERIOD_MONTHLY"},
-        "excluded": {
-            "federalDistricts": len(index["federal_districts"]),
-            "note": "Тотал РФ по ручной выгрузке (CSV); регионы смоделированы под тотал.",
-        },
-    })
+def _phrase_history(phrase, devices, client, index):
+    """Единый источник данных по фразе.
 
+    Возвращает (key, base, otpName, hist, year, market_year, otp_year), где
+    hist — полная месячная история {keys,labels,market,otp}, а *_year — суммы
+    за последний полный календарный год. Известные продукты берутся из CSV
+    (реальные тоталы РФ), остальные — синтетика по 48 месяцам.
+    """
+    ds_key = dataset.lookup(phrase) if client.demo_mode else None
+    if ds_key:
+        product = dataset.product(ds_key)
+        hist = dataset.history(ds_key)
+        year, my, oy = dataset.year_totals(ds_key)
+        return ds_key, product["base"], product["otpName"], hist, year, my, oy
 
-def _dynamics_from_dataset(ds_key, region_id, index):
-    """Месячная динамика (рынок + ОТП) из CSV; для конкретного субъекта ряд
-    масштабируется на долю региона в тотале."""
-    win = dataset.window(ds_key, 12)
-    market, otp = win["market"], win["otp"]
-    if region_id != "ALL":
-        fm, fo = dataset.region_fractions(
-            ds_key, region_id, win["marketLatest"], win["otpLatest"], index)
-        market = [int(round(v * fm)) for v in market]
-        otp = [int(round(v * fo)) for v in otp]
-    return jsonify({
-        "region": region_id,
-        "dynamics": {"labels": win["labels"], "market": market, "otp": otp},
-        "window": {"months": win["keys"], "labels": win["labels"],
-                   "period": "PERIOD_MONTHLY"},
-    })
+    otp_phrase = phrase + " ОТП"
+    win = last_n_months(48)
+    market = client.monthly_history(phrase, win["keys"], devices=devices)
+    otp = client.monthly_history(otp_phrase, win["keys"], devices=devices)
+    hist = {"keys": win["keys"], "labels": win["labels"], "market": market, "otp": otp}
+    year, my, oy = dataset.year_totals_from_series(win["keys"], market, otp)
+    return phrase, phrase, otp_phrase, hist, year, my, oy
 
 
 def _merge_regions(market_regions, otp_regions):
@@ -281,43 +219,11 @@ def _merge_regions(market_regions, otp_regions):
             "otp": oc,
             "marketShare": round(mc / total_m * 100, 2),
             "otpShare": round(oc / total_o * 100, 2),
-            "penetration": round(oc / mc * 100, 2) if mc else 0.0,
+            "penetration": round(oc / mc * 100, 3) if mc else 0.0,
             "affinityIndex": round(m.get("affinityIndex", 0)),
         })
     rows.sort(key=lambda r: r["market"], reverse=True)
     return rows
-
-
-def _pack_dynamics(axis, market, otp):
-    """Упаковка двух рядов динамики под общие подписи периода."""
-    return {
-        "labels": axis["labels"],
-        "market": [d["count"] for d in market],
-        "otp": [d["count"] for d in otp],
-    }
-
-
-def _normalize_dynamics(results):
-    out = []
-    for item in results or []:
-        out.append({
-            "date": item.get("date"),
-            "count": _safe_int(item.get("count")),
-            "share": _safe_float(item.get("share")),
-        })
-    out.sort(key=lambda r: r["date"] or "")
-    return out
-
-
-def _normalize_top(top_raw):
-    def conv(rows):
-        return [{"phrase": r.get("phrase"), "count": _safe_int(r.get("count"))}
-                for r in rows or []]
-    return {
-        "totalCount": _safe_int(top_raw.get("totalCount")),
-        "results": conv(top_raw.get("results")),
-        "associations": conv(top_raw.get("associations")),
-    }
 
 
 def _build_workbook(phrase, regions, dynamics, window, matrix):

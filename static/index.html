@@ -27,8 +27,7 @@
       <form id="searchForm">
         <div class="field field--grow">
           <label for="phrase">Ключевая фраза (рынок)</label>
-          <input id="phrase" type="text" list="phraseList" placeholder="например, Дебетовые карты" autocomplete="off" required>
-          <datalist id="phraseList"></datalist>
+          <input id="phrase" type="text" placeholder="например, Дебетовые карты" autocomplete="off" required>
         </div>
         <div class="field">
           <label for="device">Устройства</label>
@@ -40,34 +39,34 @@
           </select>
         </div>
         <div class="field">
-          <label for="period">Период динамики</label>
+          <label for="period">Период анализа</label>
           <select id="period">
-            <option value="PERIOD_MONTHLY">По месяцам</option>
-            <option value="PERIOD_WEEKLY">По неделям</option>
-            <option value="PERIOD_DAILY">По дням</option>
+            <option value="month">По месяцам</option>
+            <option value="quarter">По кварталам</option>
+            <option value="year">По годам</option>
           </select>
         </div>
         <button type="submit" id="searchBtn" class="btn btn--primary">Анализировать</button>
       </form>
-      <p class="hint">«Рынок» — частота вашей фразы. «ОТП» — та же фраза со словом <b>ОТП</b>,
-        доля ОТП = ОТП ÷ рынок. Для продуктов <span id="knownHint">из выгрузки</span>
-        тоталы РФ берутся из реальных данных; иначе — демо-режим.</p>
+      <p class="hint">«Рынок» — частота вашей фразы. «ОТП» — та же фраза со словом <b>ОТП</b>;
+        доля ОТП = ОТП ÷ рынок. Разбивка строго по субъектам РФ, федеральные округа исключены.</p>
     </section>
 
     <div id="error" class="error hidden"></div>
     <div id="loader" class="loader hidden"><span class="spinner"></span> Загрузка данных…</div>
 
     <div id="results" class="hidden">
+      <!-- KPI ряд 1 -->
       <section class="stats">
         <div class="stat-card stat-card--market">
           <span class="stat-label">Всего показов · рынок</span>
           <span id="statMarket" class="stat-value">—</span>
-          <span class="stat-foot" id="statMarketFoot">по всем субъектам РФ за месяц</span>
+          <span class="stat-foot" id="statMarketFoot">за год</span>
         </div>
         <div class="stat-card stat-card--otp">
           <span class="stat-label" id="statOtpLabel">Доля ОТП от общих запросов</span>
           <span id="statOtpShare" class="stat-value">—</span>
-          <span class="stat-foot" id="statOtpFoot">показов с «ОТП» от рынка</span>
+          <span class="stat-foot" id="statOtpFoot">ОТП ÷ рынок</span>
         </div>
         <div class="stat-card">
           <span class="stat-label">Лидер по показам</span>
@@ -79,11 +78,35 @@
         </div>
       </section>
 
+      <!-- KPI ряд 2: динамика и пики -->
+      <section class="stats">
+        <div class="stat-card">
+          <span class="stat-label">Изменение · рынок</span>
+          <span id="growthMarket" class="stat-value">—</span>
+          <span class="stat-foot" id="growthMarketFoot">за период</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Изменение · ОТП</span>
+          <span id="growthOtp" class="stat-value">—</span>
+          <span class="stat-foot" id="growthOtpFoot">за период</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Пик запросов · рынок</span>
+          <span id="peakMarket" class="stat-value stat-value--sm">—</span>
+          <span class="stat-foot" id="peakMarketFoot">—</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Пик запросов · ОТП</span>
+          <span id="peakOtp" class="stat-value stat-value--sm">—</span>
+          <span class="stat-foot" id="peakOtpFoot">—</span>
+        </div>
+      </section>
+
       <section class="panel">
         <div class="panel-head">
           <div>
             <h2>Распределение по регионам РФ</h2>
-            <p class="chart-note">Два столбца на регион: <span class="key key--market">рынок</span> и <span class="key key--otp">ОТП</span></p>
+            <p class="chart-note">Два столбца на регион: <span class="key key--market">рынок</span> и <span class="key key--otp">ОТП</span> · за год</p>
           </div>
           <div class="toggle">
             <button class="toggle-btn active" data-top="15">Топ-15</button>
@@ -105,19 +128,38 @@
           <div class="chart-box"><canvas id="dynamicsChart"></canvas></div>
         </section>
         <section class="panel">
+          <h2>Доля ОТП во времени</h2>
+          <p class="chart-note">Проникновение бренда ОТП в рынок, % запросов по месяцам</p>
+          <div class="chart-box"><canvas id="penetrationChart"></canvas></div>
+        </section>
+      </div>
+
+      <div class="grid-2">
+        <section class="panel">
+          <h2>Темп роста · рынок vs ОТП</h2>
+          <p class="chart-note">Индекс роста, 100 = первый месяц истории</p>
+          <div class="chart-box"><canvas id="growthIndexChart"></canvas></div>
+        </section>
+        <section class="panel">
           <h2>Распределение числа запросов</h2>
           <p class="chart-note">Сколько регионов попадает в каждый диапазон показов (рынок)</p>
           <div class="chart-box"><canvas id="distChart"></canvas></div>
         </section>
       </div>
 
+      <section class="panel">
+        <h2>Сезонность рынка по годам</h2>
+        <p class="chart-note">Запросы рынка по месяцам — каждая линия отдельный год (видно сезонность и динамику год-к-году)</p>
+        <div class="chart-box"><canvas id="seasonalityChart"></canvas></div>
+      </section>
+
       <div class="grid-2">
         <section class="panel">
-          <h2>Доля регионов · <span class="accent-otp">ОТП</span></h2>
+          <h2>Топ-10 регионов по запросам · <span class="accent-otp">ОТП</span></h2>
           <div class="chart-box"><canvas id="shareOtpChart"></canvas></div>
         </section>
         <section class="panel">
-          <h2>Доля регионов · <span class="accent-market">рынок</span></h2>
+          <h2>Топ-10 регионов по запросам · <span class="accent-market">рынок</span></h2>
           <div class="chart-box"><canvas id="shareMarketChart"></canvas></div>
         </section>
       </div>
