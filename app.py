@@ -94,6 +94,7 @@ def search():
         key, market_year, otp_year, index)
     regions = _merge_regions(market_regions, otp_regions)
     otp_share = round(otp_year / market_year * 100, 3) if market_year else 0.0
+    leader_otp = max(regions, key=lambda r: r["otp"])["name"] if regions else "—"
 
     return jsonify({
         "marketPhrase": base,
@@ -104,6 +105,7 @@ def search():
             "otp": otp_year,
             "otpShare": otp_share,
             "leader": regions[0]["name"] if regions else "—",
+            "leaderOtp": leader_otp,
             "year": year,
         },
         "regions": regions,
@@ -175,28 +177,53 @@ def export_excel():
 
 
 # ----------------------------------------------------------- helpers ---
+# Доли устройств (демо): «Все устройства» = полный тотал (совпадает с CSV),
+# остальные — детерминированная доля рынка/ОТП, чтобы селектор реально менял
+# цифры. ОТП слегка иначе распределён по устройствам, чем рынок.
+_DEVICE_FACTORS = {
+    "DEVICE_ALL": (1.0, 1.0),
+    "DEVICE_DESKTOP": (0.42, 0.36),
+    "DEVICE_PHONE": (0.50, 0.57),
+    "DEVICE_TABLET": (0.08, 0.07),
+}
+
+
+def _device_factors(devices):
+    if not devices:
+        return (1.0, 1.0)
+    return _DEVICE_FACTORS.get(str(devices[0]).upper(), (1.0, 1.0))
+
+
 def _phrase_history(phrase, devices, client, index):
     """Единый источник данных по фразе.
 
     Возвращает (key, base, otpName, hist, year, market_year, otp_year), где
     hist — полная месячная история {keys,labels,market,otp}, а *_year — суммы
     за последний полный календарный год. Известные продукты берутся из CSV
-    (реальные тоталы РФ), остальные — синтетика по 48 месяцам.
+    (реальные тоталы РФ), остальные — синтетика по 48 месяцам. Выбор устройства
+    масштабирует объёмы (на «Все устройства» тоталы совпадают с выгрузкой).
     """
+    mf, of = _device_factors(devices)
     ds_key = dataset.lookup(phrase) if client.demo_mode else None
     if ds_key:
         product = dataset.product(ds_key)
-        hist = dataset.history(ds_key)
-        year, my, oy = dataset.year_totals(ds_key)
-        return ds_key, product["base"], product["otpName"], hist, year, my, oy
+        h = dataset.history(ds_key)
+        keys, labels = h["keys"], h["labels"]
+        raw_market, raw_otp = h["market"], h["otp"]
+        key, base, otp_name = ds_key, product["base"], product["otpName"]
+    else:
+        otp_phrase = phrase + " ОТП"
+        win = last_n_months(48)
+        keys, labels = win["keys"], win["labels"]
+        raw_market = client.monthly_history(phrase, keys)
+        raw_otp = client.monthly_history(otp_phrase, keys)
+        key, base, otp_name = phrase, phrase, otp_phrase
 
-    otp_phrase = phrase + " ОТП"
-    win = last_n_months(48)
-    market = client.monthly_history(phrase, win["keys"], devices=devices)
-    otp = client.monthly_history(otp_phrase, win["keys"], devices=devices)
-    hist = {"keys": win["keys"], "labels": win["labels"], "market": market, "otp": otp}
-    year, my, oy = dataset.year_totals_from_series(win["keys"], market, otp)
-    return phrase, phrase, otp_phrase, hist, year, my, oy
+    market = [int(round(v * mf)) for v in raw_market]
+    otp = [int(round(v * of)) for v in raw_otp]
+    hist = {"keys": keys, "labels": labels, "market": market, "otp": otp}
+    year, my, oy = dataset.year_totals_from_series(keys, market, otp)
+    return key, base, otp_name, hist, year, my, oy
 
 
 def _merge_regions(market_regions, otp_regions):

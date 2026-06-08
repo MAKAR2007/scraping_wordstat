@@ -19,7 +19,10 @@
         <p class="subtitle">Спрос по субъектам РФ · рынок и доля бренда ОТП</p>
       </div>
     </div>
-    <span id="modeBadge" class="badge badge--demo" title="Режим работы">демо-режим</span>
+    <div class="topbar-actions">
+      <button id="exportBtn" class="btn btn--export" disabled>⬇ Excel</button>
+      <span id="modeBadge" class="badge badge--demo" title="Режим работы">демо-режим</span>
+    </div>
   </header>
 
   <main>
@@ -43,7 +46,7 @@
           <select id="period">
             <option value="month">По месяцам</option>
             <option value="quarter">По кварталам</option>
-            <option value="year">По годам</option>
+            <option value="year" selected>По годам</option>
           </select>
         </div>
         <button type="submit" id="searchBtn" class="btn btn--primary">Анализировать</button>
@@ -56,25 +59,27 @@
     <div id="loader" class="loader hidden"><span class="spinner"></span> Загрузка данных…</div>
 
     <div id="results" class="hidden">
-      <!-- KPI ряд 1 -->
+      <!-- KPI ряд 1: объёмы и лидеры -->
       <section class="stats">
         <div class="stat-card stat-card--market">
           <span class="stat-label">Всего показов · рынок</span>
           <span id="statMarket" class="stat-value">—</span>
-          <span class="stat-foot" id="statMarketFoot">за год</span>
+          <span class="stat-foot" id="statMarketFoot">за период</span>
         </div>
         <div class="stat-card stat-card--otp">
           <span class="stat-label" id="statOtpLabel">Доля ОТП от общих запросов</span>
           <span id="statOtpShare" class="stat-value">—</span>
-          <span class="stat-foot" id="statOtpFoot">ОТП ÷ рынок</span>
+          <span class="stat-foot" id="statOtpFoot">за период</span>
         </div>
         <div class="stat-card">
-          <span class="stat-label">Лидер по показам</span>
+          <span class="stat-label">Лидер · рынок</span>
           <span id="statLeader" class="stat-value stat-value--sm">—</span>
-          <span class="stat-foot">регион №1 по рынку</span>
+          <span class="stat-foot">регион №1 по запросам рынка</span>
         </div>
-        <div class="stat-card stat-card--action">
-          <button id="exportBtn" class="btn btn--export">⬇ Выгрузить в Excel</button>
+        <div class="stat-card stat-card--otp-soft">
+          <span class="stat-label">Лидер · ОТП</span>
+          <span id="statLeaderOtp" class="stat-value stat-value--sm">—</span>
+          <span class="stat-foot">регион №1 по запросам ОТП</span>
         </div>
       </section>
 
@@ -156,10 +161,12 @@
       <div class="grid-2">
         <section class="panel">
           <h2>Топ-10 регионов по запросам · <span class="accent-otp">ОТП</span></h2>
+          <p class="chart-note">Клик по региону в легенде — он переносится в «Остальные регионы»</p>
           <div class="chart-box"><canvas id="shareOtpChart"></canvas></div>
         </section>
         <section class="panel">
           <h2>Топ-10 регионов по запросам · <span class="accent-market">рынок</span></h2>
+          <p class="chart-note">Клик по региону в легенде — он переносится в «Остальные регионы»</p>
           <div class="chart-box"><canvas id="shareMarketChart"></canvas></div>
         </section>
       </div>

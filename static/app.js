@@ -54,7 +54,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   // Период — это агрегация уже загруженной истории, без обращения к серверу.
   $("period").addEventListener("change", () => {
-    if (state.marketPhrase) { renderDynamicsChart(); renderKpiBlocks(); }
+    if (state.marketPhrase) { renderDynamicsChart(); renderKpi(); }
   });
   document.querySelectorAll(".toggle-btn").forEach((b) => {
     b.addEventListener("click", () => {
@@ -123,14 +123,12 @@ async function onSearch(e) {
 
 function renderAll() {
   const t = state.totals;
-  $("statMarket").textContent = fmt(t.market);
-  $("statMarketFoot").textContent = "тотал по РФ за " + (t.year || "год");
-  $("statOtpShare").textContent = (Number(t.otpShare) || 0).toFixed(3).replace(".", ",") + "%";
   $("statOtpLabel").textContent = "Доля «" + state.otpPhrase + "» от общих";
-  $("statOtpFoot").textContent = fmt(t.otp) + " ÷ " + fmt(t.market) + " · " + (t.year || "");
   $("statLeader").textContent = t.leader || "—";
+  $("statLeaderOtp").textContent = t.leaderOtp || "—";
+  $("exportBtn").disabled = false;
 
-  renderKpiBlocks();
+  renderKpi();
   renderRegionsChart();
   renderDynamicsChart();
   renderPenetrationChart();
@@ -170,51 +168,58 @@ function aggregate(hist, period) {
   };
 }
 
-function growthDetail(agg, period, field) {
-  const need = period === "year" ? 12 : period === "quarter" ? 3 : 1;
-  const idx = [];
-  for (let i = 0; i < agg.counts.length; i++) if (agg.counts[i] >= need) idx.push(i);
-  if (idx.length < 2) return null;
-  const i1 = idx[idx.length - 2], i2 = idx[idx.length - 1];
-  const prev = agg[field][i1], last = agg[field][i2];
-  if (!prev) return null;
-  return { pct: (last - prev) / prev * 100, prevLabel: agg.labels[i1], lastLabel: agg.labels[i2] };
+function periodUnit() {
+  const p = periodKey();
+  return p === "year" ? "год" : p === "quarter" ? "квартал" : "месяц";
 }
 
-function peakInfo(hist, field) {
-  const arr = hist[field];
-  let hi = -Infinity, hidx = -1;
-  arr.forEach((v, i) => { if (v > hi) { hi = v; hidx = i; } });
-  const start = Math.max(0, arr.length - 12);
-  let lo = -Infinity, lidx = -1;
-  for (let i = start; i < arr.length; i++) if (arr[i] > lo) { lo = arr[i]; lidx = i; }
-  return {
-    histLabel: hidx >= 0 ? hist.labels[hidx] : "—", histVal: hi > 0 ? hi : 0,
-    yearLabel: lidx >= 0 ? hist.labels[lidx] : "—", yearVal: lo > 0 ? lo : 0,
-  };
-}
-
-function renderKpiBlocks() {
+// Все ключевые цифры зависят от выбранного периода: «за год» → за последний
+// полный год, «за квартал/месяц» — за последний полный квартал/месяц.
+function renderKpi() {
   const period = periodKey();
   const agg = aggregate(state.hist, period);
+  const need = period === "year" ? 12 : period === "quarter" ? 3 : 1;
+  const full = [];
+  for (let i = 0; i < agg.counts.length; i++) if (agg.counts[i] >= need) full.push(i);
+  const li = full.length ? full[full.length - 1] : agg.market.length - 1;
+
+  const market = li >= 0 ? agg.market[li] : 0;
+  const otp = li >= 0 ? agg.otp[li] : 0;
+  const share = market ? otp / market * 100 : 0;
+  const blabel = li >= 0 ? agg.labels[li] : "—";
+
+  $("statMarket").textContent = fmt(market);
+  $("statMarketFoot").textContent = "за " + blabel;
+  $("statOtpShare").textContent = share.toFixed(3).replace(".", ",") + "%";
+  $("statOtpFoot").textContent = "за " + blabel;
+
+  // Изменение: последний полный период к предыдущему.
   [["Market", "market"], ["Otp", "otp"]].forEach(([suf, field]) => {
     const el = $("growth" + suf), foot = $("growth" + suf + "Foot");
-    const d = growthDetail(agg, period, field);
-    if (!d) {
+    if (full.length < 2 || !agg[field][full[full.length - 2]]) {
       el.textContent = "—"; el.className = "stat-value"; foot.textContent = "недостаточно данных";
       return;
     }
-    const up = d.pct >= 0;
-    el.textContent = (up ? "+" : "−") + Math.abs(d.pct).toFixed(1).replace(".", ",") + " %";
+    const i1 = full[full.length - 2], i2 = full[full.length - 1];
+    const pct = (agg[field][i2] - agg[field][i1]) / agg[field][i1] * 100;
+    const up = pct >= 0;
+    el.textContent = (up ? "+" : "−") + Math.abs(pct).toFixed(1).replace(".", ",") + " %";
     el.className = "stat-value " + (up ? "growth-up" : "growth-down");
-    foot.textContent = d.lastLabel + " к " + d.prevLabel;
+    foot.textContent = agg.labels[i2] + " к " + agg.labels[i1];
   });
-  const pm = peakInfo(state.hist, "market");
-  $("peakMarket").textContent = pm.histLabel;
-  $("peakMarketFoot").textContent = "истор. " + shortNum(pm.histVal) + " · посл. год: " + pm.yearLabel;
-  const po = peakInfo(state.hist, "otp");
-  $("peakOtp").textContent = po.histLabel;
-  $("peakOtpFoot").textContent = "истор. " + shortNum(po.histVal) + " · посл. год: " + po.yearLabel;
+
+  // Пик: рекордный период в выбранной гранулярности (только полные периоды).
+  const peak = (field) => {
+    let hi = -1, hidx = -1;
+    full.forEach((i) => { if (agg[field][i] > hi) { hi = agg[field][i]; hidx = i; } });
+    return { label: hidx >= 0 ? agg.labels[hidx] : "—", val: hi > 0 ? hi : 0 };
+  };
+  const unit = periodUnit();
+  const pm = peak("market"), po = peak("otp");
+  $("peakMarket").textContent = pm.label;
+  $("peakMarketFoot").textContent = "рекордный " + unit + " · " + fmt(pm.val) + " показов";
+  $("peakOtp").textContent = po.label;
+  $("peakOtpFoot").textContent = "рекордный " + unit + " · " + fmt(po.val) + " показов";
 }
 
 // --------------------------------------------------- регионы: рынок + ОТП --
@@ -269,14 +274,22 @@ function renderDynamicsChart() {
       interaction: { mode: "index", intersect: false },
       plugins: {
         legend: { display: true, position: "top", labels: { boxWidth: 12, font: { weight: 700 } } },
-        tooltip: { callbacks: { label: (c) => " " + c.dataset.label + ": " + fmt(c.parsed.y) } },
+        tooltip: { callbacks: {
+          label: (c) => " " + c.dataset.label + ": " + fmt(c.parsed.y),
+          afterBody: (items) => {
+            if (!items.length) return "";
+            const i = items[0].dataIndex;
+            const m = agg.market[i], o = agg.otp[i];
+            return m ? "доля ОТП: " + (o / m * 100).toFixed(2).replace(".", ",") + "%" : "";
+          },
+        } },
       },
       scales: {
         yOtp: { position: "left", title: { display: true, text: "ОТП", color: C.otp },
           ticks: { callback: shortNum, color: C.otp }, grid: { color: "#f1f1f8" } },
         yMarket: { position: "right", title: { display: true, text: "Рынок", color: C.market },
           ticks: { callback: shortNum, color: C.market }, grid: { drawOnChartArea: false } },
-        x: { ticks: { maxRotation: 0, autoSkip: true, font: { size: 10 } } },
+        x: { ticks: { maxRotation: 50, minRotation: 45, autoSkip: true, font: { size: 10 } } },
       },
     },
   });
@@ -299,7 +312,7 @@ function renderPenetrationChart() {
       plugins: { legend: { display: false },
         tooltip: { callbacks: { label: (c) => " доля ОТП: " + c.parsed.y.toFixed(3).replace(".", ",") + "%" } } },
       scales: {
-        x: { ticks: { maxRotation: 0, autoSkip: true, font: { size: 10 } } },
+        x: { ticks: { maxRotation: 50, minRotation: 45, autoSkip: true, font: { size: 10 } } },
         y: { ticks: { callback: (v) => v.toFixed(1).replace(".", ",") + "%" } },
       },
     },
@@ -397,7 +410,9 @@ function renderShareChart(name, key) {
   const labels = top.map((r) => r.name);
   const data = top.map((r) => r[key]);
   const bg = PIE_COLORS.slice(0, top.length);
-  if (restSum > 0) { labels.push("Остальные регионы"); data.push(restSum); bg.push(OTHERS_COLOR); }
+  let othersIdx = -1;
+  if (restSum > 0) { labels.push("Остальные регионы"); data.push(restSum); bg.push(OTHERS_COLOR); othersIdx = data.length - 1; }
+  const origData = data.slice();   // исходные значения для пересчёта «Остальных»
 
   destroy(name);
   charts[name] = new Chart($(canvas), {
@@ -406,7 +421,24 @@ function renderShareChart(name, key) {
     options: {
       responsive: true, maintainAspectRatio: false, cutout: "58%",
       plugins: {
-        legend: { position: "right", labels: { font: { size: 11 }, boxWidth: 12, padding: 7 } },
+        legend: {
+          position: "right",
+          labels: { font: { size: 11 }, boxWidth: 12, padding: 7 },
+          // Скрытый регион переносится в «Остальные регионы» (сумма сохраняется).
+          onClick: (e, item, legend) => {
+            const ci = legend.chart;
+            const idx = item.index;
+            ci.toggleDataVisibility(idx);
+            if (othersIdx >= 0 && idx !== othersIdx) {
+              let extra = 0;
+              for (let i = 0; i < origData.length; i++) {
+                if (i !== othersIdx && ci.getDataVisibility(i) === false) extra += origData[i];
+              }
+              ci.data.datasets[0].data[othersIdx] = origData[othersIdx] + extra;
+            }
+            ci.update();
+          },
+        },
         tooltip: { callbacks: { label: (c) => {
           const total = c.dataset.data.reduce((s, v) => s + v, 0) || 1;
           return " " + c.label + ": " + fmt(c.parsed) + " (" + (c.parsed / total * 100).toFixed(1) + "%)";
