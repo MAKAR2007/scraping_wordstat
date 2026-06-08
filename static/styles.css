@@ -29,8 +29,9 @@
 
 body {
   margin: 0;
-  font-family: "Manrope", -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: "Inter", -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   color: var(--ink);
+  letter-spacing: -.1px;
   background:
     radial-gradient(1200px 480px at 100% -10%, rgba(108, 76, 241, .07), transparent 60%),
     radial-gradient(1000px 420px at -5% 0%, rgba(122, 184, 41, .08), transparent 55%),
@@ -89,7 +90,7 @@ main { max-width: 1220px; margin: 26px auto 8px; padding: 0 24px; }
 .panel:hover { box-shadow: var(--shadow-lg); transform: translateY(-1px); }
 .panel h2 { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: -.2px; }
 .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
-.chart-note { margin: 5px 0 0; color: #5b6473; font-size: 12px; font-weight: 600; }
+.chart-note { margin: 5px 0 0; color: #4a5466; font-size: 12.5px; font-weight: 600; line-height: 1.4; }
 .accent-otp { color: var(--violet); }
 .accent-market { color: var(--brand-dark); }
 
@@ -151,13 +152,17 @@ input:focus, select:focus { border-color: var(--violet); box-shadow: 0 0 0 4px v
 .stat-card--market::before { background: linear-gradient(var(--brand), var(--brand-dark)); }
 .stat-card--otp::before { background: linear-gradient(var(--violet), var(--violet-dark)); }
 .stat-card--otp-soft::before { background: linear-gradient(#9277F8, var(--violet)); }
-.stat-label { color: var(--ink-2); font-size: 12px; font-weight: 700; letter-spacing: .1px; }
+.stat-label { color: var(--ink-2); font-size: 12.5px; font-weight: 700; letter-spacing: 0; }
 .stat-value { font-size: 26px; font-weight: 800; letter-spacing: -.6px; color: var(--ink); font-variant-numeric: tabular-nums; }
 .stat-value--sm { font-size: 18px; letter-spacing: -.2px; line-height: 1.2; }
+.stat-value--md { font-size: 22px; letter-spacing: -.4px; }
 .stat-card--otp .stat-value { color: var(--violet-dark); }
 .stat-card--market .stat-value { color: var(--brand-dark); }
 .stat-card--otp-soft .stat-value { color: var(--violet-dark); }
-.stat-foot { color: #5b6473; font-size: 11.5px; font-weight: 600; }
+.stat-card--plain { box-shadow: var(--shadow-sm); }
+.stat-card--plain::before { display: none; }
+.stat-foot { color: #4a5466; font-size: 12.5px; font-weight: 600; line-height: 1.35; }
+.stats--flat { margin-bottom: 0; }
 /* Динамика: рост — зелёный, падение — красный. */
 .growth-up { color: #18a558 !important; }
 .growth-down { color: #e23b2e !important; }

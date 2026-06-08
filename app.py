@@ -84,70 +84,28 @@ def search():
     index = get_subject_index(client)
 
     try:
-        key, base, otp_name, hist, year, market_year, otp_year = \
+        _key, base, otp_name, hist, year, _my, _oy = \
             _phrase_history(phrase, devices, client, index)
     except YandexError as exc:
         return jsonify({"error": str(exc)}), 502
 
-    # Регионы масштабируются так, что их сумма = годовой тотал РФ.
-    market_regions, otp_regions = dataset.regional_split(
-        key, market_year, otp_year, index)
-    regions = _merge_regions(market_regions, otp_regions)
-    otp_share = round(otp_year / market_year * 100, 3) if market_year else 0.0
-    leader_otp = max(regions, key=lambda r: r["otp"])["name"] if regions else "—"
+    # Регионы (числа/доли/лидеры) считаются на клиенте под выбранный период,
+    # поэтому отдаём только стабильный список субъектов РФ и полную историю.
+    subjects = [{"id": sid, "name": name}
+                for sid, name in index["subjects"].items()]
 
     return jsonify({
         "marketPhrase": base,
         "otpPhrase": otp_name,
         "demo": client.demo_mode,
-        "totals": {
-            "market": market_year,
-            "otp": otp_year,
-            "otpShare": otp_share,
-            "leader": regions[0]["name"] if regions else "—",
-            "leaderOtp": leader_otp,
-            "year": year,
-        },
-        "regions": regions,
+        "year": year,
+        "subjects": subjects,
         "dynamics": hist,            # полная месячная история {keys,labels,market,otp}
         "excluded": {
             "federalDistricts": len(index["federal_districts"]),
             "note": "Федеральные округа и зарубежные регионы исключены.",
         },
     })
-
-
-@app.route("/api/dynamics", methods=["POST"])
-def dynamics_for_region():
-    """Полная месячная история (рынок + ОТП) по выбранному региону.
-
-    region == "ALL" — агрегат по всем субъектам РФ; иначе — один субъект
-    (ряд масштабируется на долю региона в годовом тотале).
-    """
-    payload = request.get_json(force=True, silent=True) or {}
-    phrase = (payload.get("phrase") or "").strip()
-    if not phrase:
-        return jsonify({"error": "Не задана ключевая фраза"}), 400
-    region_id = str(payload.get("region") or "ALL")
-    devices = payload.get("devices") or None
-
-    client = WordstatClient()
-    index = get_subject_index(client)
-    try:
-        key, _base, _otp, hist, _year, market_year, otp_year = \
-            _phrase_history(phrase, devices, client, index)
-    except YandexError as exc:
-        return jsonify({"error": str(exc)}), 502
-
-    if region_id != "ALL":
-        fm, fo = dataset.region_fractions(
-            key, region_id, market_year, otp_year, index)
-        hist = {
-            "keys": hist["keys"], "labels": hist["labels"],
-            "market": [int(round(v * fm)) for v in hist["market"]],
-            "otp": [int(round(v * fo)) for v in hist["otp"]],
-        }
-    return jsonify({"region": region_id, "dynamics": hist})
 
 
 @app.route("/api/export", methods=["POST"])

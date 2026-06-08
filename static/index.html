@@ -6,7 +6,7 @@
   <title>ОТП · Аналитика Wordstat по регионам РФ</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
@@ -97,13 +97,45 @@
         </div>
         <div class="stat-card">
           <span class="stat-label">Пик запросов · рынок</span>
-          <span id="peakMarket" class="stat-value stat-value--sm">—</span>
+          <span id="peakMarket" class="stat-value">—</span>
           <span class="stat-foot" id="peakMarketFoot">—</span>
         </div>
         <div class="stat-card">
           <span class="stat-label">Пик запросов · ОТП</span>
-          <span id="peakOtp" class="stat-value stat-value--sm">—</span>
+          <span id="peakOtp" class="stat-value">—</span>
           <span class="stat-foot" id="peakOtpFoot">—</span>
+        </div>
+      </section>
+
+      <!-- Стратегические индикаторы -->
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Стратегические индикаторы</h2>
+            <p class="chart-note" id="strategicNote">Темпы роста, проникновение бренда и концентрация спроса</p>
+          </div>
+        </div>
+        <div class="stats stats--flat">
+          <div class="stat-card stat-card--plain">
+            <span class="stat-label">CAGR рынка</span>
+            <span id="kpiCagrMarket" class="stat-value stat-value--md">—</span>
+            <span class="stat-foot">среднегодовой темп, по полным годам</span>
+          </div>
+          <div class="stat-card stat-card--plain">
+            <span class="stat-label">CAGR ОТП</span>
+            <span id="kpiCagrOtp" class="stat-value stat-value--md">—</span>
+            <span class="stat-foot">среднегодовой темп бренда</span>
+          </div>
+          <div class="stat-card stat-card--plain">
+            <span class="stat-label">Проникновение ОТП · Δ за год</span>
+            <span id="kpiPenDelta" class="stat-value stat-value--md">—</span>
+            <span class="stat-foot">изменение доли, процентных пунктов</span>
+          </div>
+          <div class="stat-card stat-card--plain">
+            <span class="stat-label">Концентрация спроса</span>
+            <span id="kpiConcentration" class="stat-value stat-value--md">—</span>
+            <span class="stat-foot">доля топ-5 регионов в рынке</span>
+          </div>
         </div>
       </section>
 
@@ -111,7 +143,7 @@
         <div class="panel-head">
           <div>
             <h2>Распределение по регионам РФ</h2>
-            <p class="chart-note">Два столбца на регион: <span class="key key--market">рынок</span> и <span class="key key--otp">ОТП</span> · за год</p>
+            <p class="chart-note">Два столбца на регион: <span class="key key--market">рынок</span> и <span class="key key--otp">ОТП</span> · <span id="regionsPeriodNote">за период</span></p>
           </div>
           <div class="toggle">
             <button class="toggle-btn active" data-top="15">Топ-15</button>
@@ -134,7 +166,7 @@
         </section>
         <section class="panel">
           <h2>Доля ОТП во времени</h2>
-          <p class="chart-note">Проникновение бренда ОТП в рынок, % запросов по месяцам</p>
+          <p class="chart-note">Проникновение бренда ОТП в рынок, % запросов по выбранному периоду</p>
           <div class="chart-box"><canvas id="penetrationChart"></canvas></div>
         </section>
       </div>
@@ -142,21 +174,51 @@
       <div class="grid-2">
         <section class="panel">
           <h2>Темп роста · рынок vs ОТП</h2>
-          <p class="chart-note">Индекс роста, 100 = первый месяц истории</p>
+          <p class="chart-note">Индекс роста, 100 = первый период истории · в подсказке — разрыв ОТП и рынка</p>
           <div class="chart-box"><canvas id="growthIndexChart"></canvas></div>
         </section>
+        <section class="panel">
+          <h2>Прогноз доли ОТП</h2>
+          <p class="chart-note">Факт + линейный прогноз проникновения бренда на 6 месяцев</p>
+          <div class="chart-box"><canvas id="forecastChart"></canvas></div>
+        </section>
+      </div>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Матрица возможностей по регионам</h2>
+            <p class="chart-note" id="opportunityNote">Спрос (рынок) × проникновение ОТП. Размер точки — объём ОТП. Цель роста — правый-нижний угол: большой спрос при низкой доле ОТП.</p>
+          </div>
+        </div>
+        <div class="chart-box chart-box--tall"><canvas id="opportunityChart"></canvas></div>
+      </section>
+
+      <div class="grid-2">
+        <section class="panel">
+          <h2>Сезонность · <span class="accent-market">рынок</span></h2>
+          <p class="chart-note">Запросы по месяцам, каждая линия — отдельный год</p>
+          <div class="chart-box"><canvas id="seasonalityChart"></canvas></div>
+        </section>
+        <section class="panel">
+          <h2>Сезонность · <span class="accent-otp">ОТП</span></h2>
+          <p class="chart-note">Запросы ОТП по месяцам, каждая линия — отдельный год</p>
+          <div class="chart-box"><canvas id="seasonalityOtpChart"></canvas></div>
+        </section>
+      </div>
+
+      <div class="grid-2">
         <section class="panel">
           <h2>Распределение числа запросов</h2>
           <p class="chart-note">Сколько регионов попадает в каждый диапазон показов (рынок)</p>
           <div class="chart-box"><canvas id="distChart"></canvas></div>
         </section>
+        <section class="panel">
+          <h2>Доля ОТП по регионам · топ-15</h2>
+          <p class="chart-note">Где бренд ОТП занимает наибольшую долю локального спроса</p>
+          <div class="chart-box"><canvas id="penByRegionChart"></canvas></div>
+        </section>
       </div>
-
-      <section class="panel">
-        <h2>Сезонность рынка по годам</h2>
-        <p class="chart-note">Запросы рынка по месяцам — каждая линия отдельный год (видно сезонность и динамику год-к-году)</p>
-        <div class="chart-box"><canvas id="seasonalityChart"></canvas></div>
-      </section>
 
       <div class="grid-2">
         <section class="panel">
