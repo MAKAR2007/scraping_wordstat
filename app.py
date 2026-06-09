@@ -8,10 +8,11 @@
 
 import io
 import os
+import sys
 
-from flask import Flask, jsonify, request, send_file, send_from_directory
+from flask import Flask, jsonify, request, send_file
 
-from months import last_full_months
+from months import last_full_months, last_n_months
 
 
 def _load_dotenv():
@@ -32,7 +33,9 @@ def _load_dotenv():
 
 _load_dotenv()
 
-from regions import all_subject_ids, build_subject_index, filter_to_subjects
+import dataset
+import region_weights
+from regions import build_subject_index
 from yandex_client import WordstatClient, YandexError
 
 app = Flask(__name__, static_folder="static", static_url_path="")
@@ -53,13 +56,21 @@ def get_subject_index(client):
 
 @app.route("/")
 def index():
-    return send_from_directory("static", "index.html")
+    # send_static_file резолвит путь от root_path приложения (каталог app.py),
+    # поэтому работает независимо от текущего рабочего каталога процесса.
+    return app.send_static_file("index.html")
 
 
 @app.route("/api/status")
 def status():
     client = WordstatClient()
     return jsonify({"demo": client.demo_mode})
+
+
+@app.route("/api/products")
+def products():
+    """Фразы с реальными данными по тоталу РФ (из ручной выгрузки CSV)."""
+    return jsonify({"phrases": dataset.known_phrases()})
 
 
 @app.route("/api/search", methods=["POST"])
@@ -70,85 +81,50 @@ def search():
         return jsonify({"error": "Не задана ключевая фраза"}), 400
 
     devices = payload.get("devices") or None
-    otp = bool(payload.get("otp"))
-    window = last_full_months()
-
-    # При включённом тумблере ОТП основные данные строятся по фразе со словом
-    # «ОТП», а исходная фраза («общие запросы») используется для расчёта доли.
-    query_phrase = (phrase + " ОТП") if otp else phrase
-
     client = WordstatClient()
     index = get_subject_index(client)
 
     try:
-        # 1. Распределение по регионам -> только субъекты РФ.
-        dist_raw = client.get_regions_distribution(query_phrase, devices=devices)
-        regions = filter_to_subjects(dist_raw.get("results"), index)
-
-        # 2. Динамика частоты за последние 12 полных месяцев (по всем субъектам РФ).
-        dyn_raw = client.dynamics_window(
-            query_phrase, window, region_id="ALL",
-            all_region_ids=all_subject_ids(index), devices=devices,
-        )
-        dynamics = _normalize_dynamics(dyn_raw.get("results"))
-
-        # 3. Доля ОТП: count(фраза + «ОТП») / count(фраза) по регионам.
-        otp_block = None
-        if otp:
-            base_raw = client.get_regions_distribution(phrase, devices=devices)
-            base_regions = filter_to_subjects(base_raw.get("results"), index)
-            otp_block = _build_otp_share(regions, base_regions)
-
+        key, base, otp_name, hist, year, _my, _oy = \
+            _phrase_history(phrase, devices, client, index)
     except YandexError as exc:
         return jsonify({"error": str(exc)}), 502
 
-    total = sum(r["count"] for r in regions)
+    # Регионы (числа/доли/лидеры) считаются на клиенте под выбранный период.
+    # Веса — реалистичные (по населению/спросу), сумма по РФ = тотал из выгрузки.
+    names = list(index["subjects"].values())
+    ws = region_weights.weights_for(names)
+    subjects = [{"id": sid, "name": name, "weight": w}
+                for (sid, name), w in zip(index["subjects"].items(), ws)]
+
+    # Конкурентный анализ: бренды в категории (масштаб по устройству как у ОТП).
+    of = _device_factors(devices)[1]
+    competitors = []
+    for brand in dataset.competitor_series(key):
+        competitors.append({
+            "brand": brand["brand"], "isOtp": brand["isOtp"],
+            "series": [int(round(v * of)) for v in brand["series"]],
+        })
+
+    # Источник: реальная выгрузка (CSV) для известных продуктов, иначе — демо.
+    source = "csv" if (client.demo_mode and dataset.lookup(phrase)) else (
+        "api" if not client.demo_mode else "synthetic")
+
     return jsonify({
-        "phrase": query_phrase,
-        "basePhrase": phrase,
-        "otp": otp,
-        "otpShare": otp_block,
+        "marketPhrase": base,
+        "otpPhrase": otp_name,
         "demo": client.demo_mode,
-        "totalCount": total,
-        "regionsCount": len(regions),
-        "regions": regions,
-        "dynamics": dynamics,
-        "window": {"months": window["months"], "labels": window["labels"]},
+        "source": source,
+        "queryPhrase": phrase,
+        "knownPhrases": dataset.known_phrases(),
+        "year": year,
+        "subjects": subjects,
+        "competitors": competitors,
+        "dynamics": hist,            # полная месячная история {keys,labels,market,otp}
         "excluded": {
             "federalDistricts": len(index["federal_districts"]),
             "note": "Федеральные округа и зарубежные регионы исключены.",
         },
-    })
-
-
-@app.route("/api/dynamics", methods=["POST"])
-def dynamics_for_region():
-    """Динамика частоты за последние 12 полных месяцев по выбранному региону.
-
-    region == "ALL" — агрегат по всем субъектам РФ; иначе — один субъект.
-    """
-    payload = request.get_json(force=True, silent=True) or {}
-    phrase = (payload.get("phrase") or "").strip()
-    if not phrase:
-        return jsonify({"error": "Не задана ключевая фраза"}), 400
-    region_id = str(payload.get("region") or "ALL")
-    devices = payload.get("devices") or None
-
-    client = WordstatClient()
-    index = get_subject_index(client)
-    window = last_full_months()
-    try:
-        raw = client.dynamics_window(
-            phrase, window, region_id=region_id,
-            all_region_ids=all_subject_ids(index), devices=devices,
-        )
-    except YandexError as exc:
-        return jsonify({"error": str(exc)}), 502
-
-    return jsonify({
-        "region": region_id,
-        "dynamics": _normalize_dynamics(raw.get("results")),
-        "window": {"months": window["months"], "labels": window["labels"]},
     })
 
 
@@ -179,65 +155,80 @@ def export_excel():
 
 
 # ----------------------------------------------------------- helpers ---
-def _build_otp_share(otp_regions, base_regions):
-    """Доля запросов со словом «ОТП» от общих запросов по каждому субъекту РФ.
+# Доли устройств (демо): «Все устройства» = полный тотал (совпадает с CSV),
+# остальные — детерминированная доля рынка/ОТП, чтобы селектор реально менял
+# цифры. ОТП слегка иначе распределён по устройствам, чем рынок.
+_DEVICE_FACTORS = {
+    "DEVICE_ALL": (1.0, 1.0),
+    "DEVICE_DESKTOP": (0.42, 0.36),
+    "DEVICE_PHONE": (0.50, 0.57),
+    "DEVICE_TABLET": (0.08, 0.07),
+}
 
-    :param otp_regions: распределение по фразе «… ОТП» (count = запросы с ОТП).
-    :param base_regions: распределение по исходной фразе (общие запросы).
-    :return: dict с суммарной долей и построчной разбивкой (отсортировано по
-             общему числу запросов по убыванию).
+
+def _device_factors(devices):
+    if not devices:
+        return (1.0, 1.0)
+    return _DEVICE_FACTORS.get(str(devices[0]).upper(), (1.0, 1.0))
+
+
+def _phrase_history(phrase, devices, client, index):
+    """Единый источник данных по фразе.
+
+    Возвращает (key, base, otpName, hist, year, market_year, otp_year), где
+    hist — полная месячная история {keys,labels,market,otp}, а *_year — суммы
+    за последний полный календарный год. Известные продукты берутся из CSV
+    (реальные тоталы РФ), остальные — синтетика по 48 месяцам. Выбор устройства
+    масштабирует объёмы (на «Все устройства» тоталы совпадают с выгрузкой).
     """
-    base_by_id = {r["id"]: r["count"] for r in base_regions}
-    otp_by_id = {r["id"]: r["count"] for r in otp_regions}
-    names = {r["id"]: r["name"] for r in base_regions}
-    names.update({r["id"]: r["name"] for r in otp_regions})
+    mf, of = _device_factors(devices)
+    ds_key = dataset.lookup(phrase) if client.demo_mode else None
+    if ds_key:
+        product = dataset.product(ds_key)
+        h = dataset.history(ds_key)
+        keys, labels = h["keys"], h["labels"]
+        raw_market, raw_otp = h["market"], h["otp"]
+        key, base, otp_name = ds_key, product["base"], product["otpName"]
+    else:
+        otp_phrase = phrase + " ОТП"
+        win = last_n_months(48)
+        keys, labels = win["keys"], win["labels"]
+        raw_market = client.monthly_history(phrase, keys)
+        raw_otp = client.monthly_history(otp_phrase, keys)
+        key, base, otp_name = phrase, phrase, otp_phrase
 
+    market = [int(round(v * mf)) for v in raw_market]
+    otp = [int(round(v * of)) for v in raw_otp]
+    hist = {"keys": keys, "labels": labels, "market": market, "otp": otp}
+    year, my, oy = dataset.year_totals_from_series(keys, market, otp)
+    return key, base, otp_name, hist, year, my, oy
+
+
+def _merge_regions(market_regions, otp_regions):
+    """Сводит распределения рынка и ОТП в строки по субъектам РФ.
+
+    Для каждого региона: market/otp (абсолют), marketShare/otpShare (доля
+    внутри своего набора) и penetration — доля ОТП от рынка в этом регионе.
+    """
+    otp_by_id = {r["id"]: r for r in otp_regions}
+    total_m = sum(r["count"] for r in market_regions) or 1
+    total_o = sum(r["count"] for r in otp_regions) or 1
     rows = []
-    for rid in set(base_by_id) | set(otp_by_id):
-        base_c = base_by_id.get(rid, 0)
-        otp_c = otp_by_id.get(rid, 0)
-        share = round(otp_c / base_c * 100, 2) if base_c else 0.0
+    for m in market_regions:
+        mc = m["count"]
+        oc = int(otp_by_id.get(m["id"], {}).get("count", 0))
         rows.append({
-            "id": rid,
-            "name": names.get(rid, rid),
-            "otpCount": otp_c,
-            "baseCount": base_c,
-            "share": share,
+            "id": m["id"],
+            "name": m["name"],
+            "market": mc,
+            "otp": oc,
+            "marketShare": round(mc / total_m * 100, 2),
+            "otpShare": round(oc / total_o * 100, 2),
+            "penetration": round(oc / mc * 100, 3) if mc else 0.0,
+            "affinityIndex": round(m.get("affinityIndex", 0)),
         })
-    rows.sort(key=lambda r: r["baseCount"], reverse=True)
-
-    total_otp = sum(r["otpCount"] for r in rows)
-    total_base = sum(r["baseCount"] for r in rows)
-    total_share = round(total_otp / total_base * 100, 2) if total_base else 0.0
-    return {
-        "totalOtp": total_otp,
-        "totalBase": total_base,
-        "totalShare": total_share,
-        "regions": rows,
-    }
-
-
-def _normalize_dynamics(results):
-    out = []
-    for item in results or []:
-        out.append({
-            "date": item.get("date"),
-            "count": _safe_int(item.get("count")),
-            "share": _safe_float(item.get("share")),
-        })
-    out.sort(key=lambda r: r["date"] or "")
-    return out
-
-
-def _normalize_top(top_raw):
-    def conv(rows):
-        return [{"phrase": r.get("phrase"), "count": _safe_int(r.get("count"))}
-                for r in rows or []]
-    return {
-        "totalCount": _safe_int(top_raw.get("totalCount")),
-        "results": conv(top_raw.get("results")),
-        "associations": conv(top_raw.get("associations")),
-    }
+    rows.sort(key=lambda r: r["market"], reverse=True)
+    return rows
 
 
 def _build_workbook(phrase, regions, dynamics, window, matrix):
@@ -251,7 +242,7 @@ def _build_workbook(phrase, regions, dynamics, window, matrix):
     matrix = matrix or {}
 
     wb = Workbook()
-    header_fill = PatternFill("solid", fgColor="7E3FF2")   # фирменный фиолетовый ОТП
+    header_fill = PatternFill("solid", fgColor="7AB829")   # фирменный зелёный ОТП
     header_font = Font(bold=True, color="FFFFFF")
 
     def style_header(ws, row, ncols):
@@ -262,64 +253,68 @@ def _build_workbook(phrase, regions, dynamics, window, matrix):
             cell.alignment = Alignment(horizontal="center", wrap_text=True)
 
     # --- Лист 1: Регионы (субъекты РФ) ---
-    # Без заголовочных строк и без столбца с номерами: первая строка — шапка.
     ws = wb.active
     ws.title = "Регионы РФ"
-    headers = ["Регион (субъект РФ)", "Показов за месяц", "Доля, %",
+    headers = ["Регион (субъект РФ)", "Показов (рынок)", "Показов (ОТП)",
+               "Доля ОТП от рынка, %", "Доля рынка, %",
                "Индекс соответствия"] + month_labels
     ws.append(headers)
     style_header(ws, 1, len(headers))
     for r in regions:
         rid = str(r.get("id"))
         monthly = matrix.get(rid, [None] * len(month_keys))
-        row = [r.get("name"), r.get("count"),
-               round(r.get("share", 0), 3), r.get("affinityIndex")]
+        row = [r.get("name"), r.get("market"), r.get("otp"),
+               r.get("penetration"), r.get("marketShare"),
+               r.get("affinityIndex")]
         row.extend(monthly)
         ws.append(row)
 
-    ws.column_dimensions["A"].width = 40
-    ws.column_dimensions["B"].width = 16
-    ws.column_dimensions["C"].width = 10
-    ws.column_dimensions["D"].width = 18
+    ws.column_dimensions["A"].width = 38
+    for col, w in (("B", 16), ("C", 15), ("D", 18), ("E", 14), ("F", 18)):
+        ws.column_dimensions[col].width = w
     for i in range(len(month_labels)):
-        ws.column_dimensions[get_column_letter(5 + i)].width = 11
+        ws.column_dimensions[get_column_letter(7 + i)].width = 11
     ws.freeze_panes = "B2"
 
-    # Диаграмма топ-15 регионов (шапка в строке 1, регион — col A, показы — col B).
+    # Диаграмма топ-15 регионов: рынок vs ОТП (col B, C).
     if regions:
         n = min(len(regions), 15)
         chart = BarChart()
-        chart.title = "Топ регионов по числу показов"
+        chart.title = "Топ-15 регионов: рынок и ОТП"
         chart.type = "bar"
         chart.height = 12
         chart.width = 22
-        data = Reference(ws, min_col=2, min_row=1, max_row=1 + n)
+        data = Reference(ws, min_col=2, max_col=3, min_row=1, max_row=1 + n)
         cats = Reference(ws, min_col=1, min_row=2, max_row=1 + n)
         chart.add_data(data, titles_from_data=True)
         chart.set_categories(cats)
-        chart.legend = None
         anchor = get_column_letter(len(headers) + 2) + "2"
         ws.add_chart(chart, anchor)
 
-    # --- Лист 2: Динамика (последние 12 полных месяцев) ---
+    # --- Лист 2: Динамика (рынок + ОТП) ---
+    labels = (dynamics or {}).get("labels") or []
+    market = (dynamics or {}).get("market") or []
+    otp = (dynamics or {}).get("otp") or []
     ws2 = wb.create_sheet("Динамика")
-    ws2.append(["Месяц", "Показов"])
-    style_header(ws2, 1, 2)
-    for d in dynamics:
-        ws2.append([(d.get("date") or "")[:7], d.get("count")])
-    ws2.column_dimensions["A"].width = 14
-    ws2.column_dimensions["B"].width = 14
-    if dynamics:
+    ws2.append(["Период", "Показов (рынок)", "Показов (ОТП)"])
+    style_header(ws2, 1, 3)
+    for i, lab in enumerate(labels):
+        ws2.append([lab,
+                    market[i] if i < len(market) else None,
+                    otp[i] if i < len(otp) else None])
+    ws2.column_dimensions["A"].width = 16
+    ws2.column_dimensions["B"].width = 16
+    ws2.column_dimensions["C"].width = 16
+    if labels:
         line = LineChart()
-        line.title = "Динамика показов"
+        line.title = "Динамика показов: рынок и ОТП"
         line.height = 10
         line.width = 24
-        data = Reference(ws2, min_col=2, min_row=1, max_row=1 + len(dynamics))
-        cats = Reference(ws2, min_col=1, min_row=2, max_row=1 + len(dynamics))
+        data = Reference(ws2, min_col=2, max_col=3, min_row=1, max_row=1 + len(labels))
+        cats = Reference(ws2, min_col=1, min_row=2, max_row=1 + len(labels))
         line.add_data(data, titles_from_data=True)
         line.set_categories(cats)
-        line.legend = None
-        ws2.add_chart(line, "D2")
+        ws2.add_chart(line, "E2")
 
     buffer = io.BytesIO()
     wb.save(buffer)
@@ -346,6 +341,20 @@ def _safe_name(phrase):
     return ("".join(keep)[:40]) or "export"
 
 
+def _resolve_port():
+    """Порт: --port N → переменная PORT → 5000 по умолчанию.
+
+    На macOS порт 5000 по умолчанию занимает AirPlay (IPv6 ::1), поэтому
+    возможность переопределить порт особенно полезна локально.
+    """
+    argv = sys.argv
+    if "--port" in argv:
+        try:
+            return int(argv[argv.index("--port") + 1])
+        except (IndexError, ValueError):
+            pass
+    return int(os.environ.get("PORT", "5000"))
+
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "5000"))
-    app.run(host="127.0.0.1", port=port, debug=False)
+    app.run(host="127.0.0.1", port=_resolve_port(), debug=False)

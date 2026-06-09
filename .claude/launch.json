@@ -3,9 +3,9 @@
   "configurations": [
     {
       "name": "wordstat",
-      "runtimeExecutable": "python",
-      "runtimeArgs": ["app.py"],
-      "port": 5000
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["app.py", "--port", "5050"],
+      "port": 5050
     }
   ]
 }

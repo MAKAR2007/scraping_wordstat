@@ -83,7 +83,7 @@ class WordstatClient:
     def get_regions_distribution(self, phrase, devices=None):
         """region=REGION_REGIONS — распределение по регионам (субъектам)."""
         if self.demo_mode:
-            return _demo_distribution(phrase)
+            return _demo_distribution(phrase, devices)
         body = {"phrase": phrase, "region": "REGION_REGIONS"}
         if devices:
             body["devices"] = devices
@@ -115,22 +115,36 @@ class WordstatClient:
     # -------------------------------------------------- динамика по окну ---
     def dynamics_window(self, phrase, window, region_id="ALL",
                         all_region_ids=None, devices=None):
-        """Месячная динамика за окно «последние 12 полных месяцев».
+        """Динамика частоты за окно (месяц/неделя/день — см. window["period"]).
 
         region_id == "ALL" — агрегат по всем субъектам РФ (all_region_ids),
         иначе — по одному выбранному субъекту.
         """
         if self.demo_mode:
             seed_key = phrase if region_id == "ALL" else "%s|%s" % (phrase, region_id)
-            return {"results": _demo_monthly(seed_key, window["months"])}
+            return {"results": _demo_series(seed_key, window["months"], devices)}
+        period = window.get("period", "PERIOD_MONTHLY")
         if region_id == "ALL":
             regions = all_region_ids
         else:
             regions = [region_id]
         return self.get_dynamics(
-            phrase, "PERIOD_MONTHLY", window["fromDate"], window["toDate"],
+            phrase, period, window["fromDate"], window["toDate"],
             regions=regions, devices=devices,
         )
+
+    def monthly_history(self, phrase, keys, devices=None):
+        """Месячный ряд частот по списку ключей ['YYYY-MM', ...] (агрегат РФ).
+
+        Для неизвестных фраз — синтетика; в рабочем режиме — помесячный API.
+        """
+        win = {"months": keys, "period": "PERIOD_MONTHLY",
+               "fromDate": keys[0] + "-01T00:00:00Z",
+               "toDate": keys[-1] + "-28T00:00:00Z"}
+        res = self.dynamics_window(phrase, win, region_id="ALL",
+                                   all_region_ids=None, devices=devices)
+        by = {(r.get("date") or "")[:7]: _int(r.get("count")) for r in res.get("results") or []}
+        return [by.get(k, 0) for k in keys]
 
     def monthly_matrix(self, phrase, region_ids, window, devices=None):
         """Матрица «регион × месяц» за окно последних 12 полных месяцев.
@@ -142,7 +156,7 @@ class WordstatClient:
         matrix = {}
         for rid in region_ids:
             if self.demo_mode:
-                points = _demo_monthly("%s|%s" % (phrase, rid), months)
+                points = _demo_series("%s|%s" % (phrase, rid), months, devices)
             else:
                 resp = self.get_dynamics(
                     phrase, "PERIOD_MONTHLY", window["fromDate"],
@@ -161,18 +175,36 @@ def _seed(text):
     return int(hashlib.md5(text.encode("utf-8")).hexdigest()[:8], 16)
 
 
-def _demo_distribution(phrase):
+# Доля устройства в общем объёме показов (демо-режим). Позволяет селектору
+# «Устройства» давать видимо разные данные.
+_DEVICE_FACTOR = {
+    "DEVICE_ALL": 1.0,
+    "DEVICE_DESKTOP": 0.42,
+    "DEVICE_PHONE": 0.50,
+    "DEVICE_TABLET": 0.08,
+}
+
+
+def _device_factor(devices):
+    if not devices:
+        return 1.0
+    return _DEVICE_FACTOR.get(str(devices[0]).upper(), 1.0)
+
+
+def _demo_distribution(phrase, devices=None):
     """Возвращает «сырое» распределение в формате API, включая федеральные
     округа, Россию и пару зарубежных стран — чтобы фильтрация субъектов была
     наглядно проверяемой (всё лишнее отсекается в regions.filter_to_subjects).
+
+    Запрос «… ОТП» строится как детерминированная доля (5–45%) от базовой
+    фразы по каждому региону — так доля ОТП всегда ≤ 100% и правдоподобна.
+    Селектор устройств масштабирует объёмы (_device_factor).
     """
     idx = build_subject_index({"regions": [RUSSIA_TREE]})
-    # Демо-режим: запрос «… ОТП» — это доля от исходной фразы, поэтому его
-    # частоты строятся как детерминированная часть базовых (всегда ≤ базовых),
-    # чтобы доля ОТП выглядела правдоподобно (не превышала 100%).
     is_otp = phrase.endswith(" ОТП")
     base_phrase = phrase[:-4] if is_otp else phrase
     base = _seed(base_phrase)
+    factor = _device_factor(devices)
     results = []
 
     # Шум: Россия целиком + зарубежные страны — должны быть отфильтрованы.
@@ -186,15 +218,18 @@ def _demo_distribution(phrase):
     total = 0
     raw = []
     for i, (sid, name) in enumerate(idx["subjects"].items()):
-        # Псевдослучайная, но детерминированная по фразе величина.
+        # Базовая (рыночная) частота — детерминированная по фразе и региону.
         val = (base // (i + 3)) % 90000 + (len(name) * 137) % 5000 + 200
         if is_otp:
-            # Доля ОТП по региону: 5–45% от базовой частоты (детерминированно).
-            frac = (_seed(base_phrase + sid) % 41 + 5) / 100.0
-            val = int(val * frac)
+            # Доля ОТП по региону: 0.3–3.0% от рыночной частоты (как в реальности —
+            # бренд занимает малую долю рынка; детерминированно по фразе/региону).
+            frac = (_seed(base_phrase + sid) % 28 + 3) / 1000.0
+            val = max(0, int(val * frac))
+        val = max(1, int(val * factor))
         raw.append((sid, val))
         total += val
-        # Заодно добавим строку федерального округа как шум — её отсеют.
+
+    # Строки федеральных округов как шум — отсеются фильтром субъектов.
     for fd_id, fd_name in idx["federal_districts"].items():
         results.append({"region": fd_id, "count": "777777", "share": "9",
                         "affinityIndex": "80"})
@@ -215,21 +250,28 @@ def _int(value):
         return 0
 
 
-def _demo_monthly(seed_key, months):
-    """Детерминированный месячный ряд по списку месяцев ["YYYY-MM", ...].
+def _demo_series(seed_key, keys, devices=None):
+    """Детерминированный временной ряд по списку ключей.
 
-    Зависит от seed_key (фраза и/или регион), чтобы у каждого региона была
-    своя, но стабильная сезонность.
+    Ключ — "YYYY-MM" (месяц) либо "YYYY-MM-DD" (неделя/день). Сезонность
+    зависит от seed_key (фраза и/или регион). Запрос «… ОТП» наследует форму
+    рынка, но в меньшем масштабе (seed по базовой фразе + множитель доли).
+    Селектор устройств масштабирует объёмы.
     """
-    base = _seed(seed_key)
+    is_otp = "ОТП" in seed_key
+    base_key = seed_key.replace(" ОТП", "")
+    base = _seed(base_key)
     amp = base % 9000 + 3000          # амплитуда сезонных колебаний
     level = base % 40000 + 8000       # базовый уровень
+    scale = ((_seed(base_key + "otp") % 28 + 3) / 1000.0) if is_otp else 1.0
+    factor = _device_factor(devices)
     results = []
-    for i, ym in enumerate(months):
+    for i, key in enumerate(keys):
         season = int(amp * (1 + math.sin((i + base % 12) / 1.9)))
         count = max(200, level + season + (base // (i + 3)) % 6000)
-        results.append({"date": ym + "-01T00:00:00Z",
-                        "count": str(count), "share": "0"})
+        count = max(20, int(count * scale * factor))
+        date = key + "-01T00:00:00Z" if len(key) == 7 else key + "T00:00:00Z"
+        results.append({"date": date, "count": str(count), "share": "0"})
     return results
 
 

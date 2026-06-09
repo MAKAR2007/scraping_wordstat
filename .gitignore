@@ -1,13 +1,13 @@
-# Секреты — не коммитить
+# секреты и окружение
 .env
-.env.bak
+.env.*
 *.bak
 
-# Python
+# python
 __pycache__/
 *.py[cod]
 .venv/
 venv/
 
-# OS
+# ОС
 .DS_Store
