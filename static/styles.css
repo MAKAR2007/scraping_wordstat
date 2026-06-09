@@ -91,6 +91,7 @@ main { max-width: 1220px; margin: 26px auto 8px; padding: 0 24px; }
 .panel h2 { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: -.2px; }
 .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
 .chart-note { margin: 5px 0 0; color: #4a5466; font-size: 12.5px; font-weight: 600; line-height: 1.4; }
+.cagr-note { color: var(--ink-2); font-weight: 800; }
 .accent-otp { color: var(--violet); }
 .accent-market { color: var(--brand-dark); }
 

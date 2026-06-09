@@ -34,6 +34,7 @@ def _load_dotenv():
 _load_dotenv()
 
 import dataset
+import region_weights
 from regions import build_subject_index
 from yandex_client import WordstatClient, YandexError
 
@@ -84,15 +85,26 @@ def search():
     index = get_subject_index(client)
 
     try:
-        _key, base, otp_name, hist, year, _my, _oy = \
+        key, base, otp_name, hist, year, _my, _oy = \
             _phrase_history(phrase, devices, client, index)
     except YandexError as exc:
         return jsonify({"error": str(exc)}), 502
 
-    # Регионы (числа/доли/лидеры) считаются на клиенте под выбранный период,
-    # поэтому отдаём только стабильный список субъектов РФ и полную историю.
-    subjects = [{"id": sid, "name": name}
-                for sid, name in index["subjects"].items()]
+    # Регионы (числа/доли/лидеры) считаются на клиенте под выбранный период.
+    # Веса — реалистичные (по населению/спросу), сумма по РФ = тотал из выгрузки.
+    names = list(index["subjects"].values())
+    ws = region_weights.weights_for(names)
+    subjects = [{"id": sid, "name": name, "weight": w}
+                for (sid, name), w in zip(index["subjects"].items(), ws)]
+
+    # Конкурентный анализ: бренды в категории (масштаб по устройству как у ОТП).
+    of = _device_factors(devices)[1]
+    competitors = []
+    for brand in dataset.competitor_series(key):
+        competitors.append({
+            "brand": brand["brand"], "isOtp": brand["isOtp"],
+            "series": [int(round(v * of)) for v in brand["series"]],
+        })
 
     return jsonify({
         "marketPhrase": base,
@@ -100,6 +112,7 @@ def search():
         "demo": client.demo_mode,
         "year": year,
         "subjects": subjects,
+        "competitors": competitors,
         "dynamics": hist,            # полная месячная история {keys,labels,market,otp}
         "excluded": {
             "federalDistricts": len(index["federal_districts"]),

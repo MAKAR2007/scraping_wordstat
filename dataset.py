@@ -32,7 +32,16 @@ _RU_LABEL = ["", "янв", "фев", "мар", "апр", "май", "июн",
              "июл", "авг", "сен", "окт", "ноя", "дек"]
 
 _OTP_SUFFIX = " ОТП"
-_cache = {"products": None, "month_cols": None}
+
+# Бренды-конкуренты из выгрузки: нормализованное имя строки -> (категория, бренд).
+_COMPETITOR_MAP = {
+    "кредитная карта альфа": ("кредитные карты", "Альфа"),
+    "кредитная карта т-банк": ("кредитные карты", "Т-Банк"),
+    "кредитная карта сбер": ("кредитные карты", "Сбер"),
+    "валютные переводы райффайзен": ("валютные переводы", "Райффайзен"),
+}
+
+_cache = {"products": None, "month_cols": None, "competitors": {}}
 
 
 # ----------------------------------------------------------------- parse ---
@@ -120,6 +129,15 @@ def _load():
                 "otp": series(r),
             }
 
+        # Бренды-конкуренты по категориям.
+        competitors = {}
+        for r in rows:
+            nk = _norm(r[1] if len(r) > 1 else "")
+            if nk in _COMPETITOR_MAP:
+                cat, brand = _COMPETITOR_MAP[nk]
+                competitors.setdefault(cat, []).append({"brand": brand, "series": series(r)})
+        _cache["competitors"] = competitors
+
     _cache["products"] = products
     _cache["month_cols"] = month_cols
     return products
@@ -138,6 +156,23 @@ def product(key):
 
 def known_phrases():
     return [p["base"] for p in _load().values()]
+
+
+def competitor_series(key):
+    """Бренды в категории (ОТП + конкуренты), ряды выровнены по _ordered_keys.
+
+    Возвращает [] если конкурентов нет (кроме самого ОТП)."""
+    prods = _load()
+    if key not in prods:
+        return []
+    keys = _ordered_keys()
+    p = prods[key]
+    out = [{"brand": "ОТП", "isOtp": True,
+            "series": [int(p["otp"].get(k) or 0) for k in keys]}]
+    for c in _cache.get("competitors", {}).get(key, []):
+        out.append({"brand": c["brand"], "isOtp": False,
+                    "series": [int(c["series"].get(k) or 0) for k in keys]})
+    return out if len(out) > 1 else []
 
 
 def _ordered_keys():

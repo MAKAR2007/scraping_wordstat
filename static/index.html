@@ -107,34 +107,34 @@
         </div>
       </section>
 
-      <!-- Стратегические индикаторы -->
+      <!-- Концентрация спроса -->
       <section class="panel">
         <div class="panel-head">
           <div>
-            <h2>Стратегические индикаторы</h2>
-            <p class="chart-note" id="strategicNote">Темпы роста, проникновение бренда и концентрация спроса</p>
+            <h2>Концентрация спроса</h2>
+            <p class="chart-note" id="strategicNote">Насколько спрос сосредоточен в крупнейших регионах</p>
           </div>
         </div>
         <div class="stats stats--flat">
           <div class="stat-card stat-card--plain">
-            <span class="stat-label">CAGR рынка</span>
-            <span id="kpiCagrMarket" class="stat-value stat-value--md">—</span>
-            <span class="stat-foot">среднегодовой темп, по полным годам</span>
-          </div>
-          <div class="stat-card stat-card--plain">
-            <span class="stat-label">CAGR ОТП</span>
-            <span id="kpiCagrOtp" class="stat-value stat-value--md">—</span>
-            <span class="stat-foot">среднегодовой темп бренда</span>
-          </div>
-          <div class="stat-card stat-card--plain">
-            <span class="stat-label">Проникновение ОТП · Δ за год</span>
-            <span id="kpiPenDelta" class="stat-value stat-value--md">—</span>
-            <span class="stat-foot">изменение доли, процентных пунктов</span>
-          </div>
-          <div class="stat-card stat-card--plain">
-            <span class="stat-label">Концентрация спроса</span>
-            <span id="kpiConcentration" class="stat-value stat-value--md">—</span>
+            <span class="stat-label">Концентрация · рынок</span>
+            <span id="kpiConcMarket" class="stat-value stat-value--md">—</span>
             <span class="stat-foot">доля топ-5 регионов в рынке</span>
+          </div>
+          <div class="stat-card stat-card--plain">
+            <span class="stat-label">Концентрация · ОТП</span>
+            <span id="kpiConcOtp" class="stat-value stat-value--md">—</span>
+            <span class="stat-foot">доля топ-5 регионов в запросах ОТП</span>
+          </div>
+          <div class="stat-card stat-card--plain">
+            <span class="stat-label">Топ-10 · рынок</span>
+            <span id="kpiTop10" class="stat-value stat-value--md">—</span>
+            <span class="stat-foot">доля топ-10 регионов в рынке</span>
+          </div>
+          <div class="stat-card stat-card--plain">
+            <span class="stat-label">Широта спроса</span>
+            <span id="kpiBreadth" class="stat-value stat-value--md">—</span>
+            <span class="stat-foot">регионов формируют 80% спроса</span>
           </div>
         </div>
       </section>
@@ -158,7 +158,7 @@
           <div class="panel-head">
             <div>
               <h2>Динамика частоты</h2>
-              <p class="chart-note"><span class="key key--otp">ОТП</span> — левая ось, <span class="key key--market">рынок</span> — правая ось</p>
+              <p class="chart-note"><span class="key key--otp">ОТП</span> — левая ось, <span class="key key--market">рынок</span> — правая ось · <span id="dynamicsCagr" class="cagr-note">CAGR —</span></p>
             </div>
             <select id="dynRegion" class="filter filter--select" title="Регион для динамики"></select>
           </div>
@@ -179,7 +179,7 @@
         </section>
         <section class="panel">
           <h2>Прогноз доли ОТП</h2>
-          <p class="chart-note">Факт + линейный прогноз проникновения бренда на 6 месяцев</p>
+          <p class="chart-note">Факт + прогноз на 6 месяцев с доверительным коридором (±1,5σ тренда)</p>
           <div class="chart-box"><canvas id="forecastChart"></canvas></div>
         </section>
       </div>
@@ -193,6 +193,19 @@
         </div>
         <div class="chart-box chart-box--tall"><canvas id="opportunityChart"></canvas></div>
       </section>
+
+      <div class="grid-2 hidden" id="competitionSection">
+        <section class="panel">
+          <h2>Конкуренты · динамика запросов</h2>
+          <p class="chart-note" id="competitionNote">Бренды в категории: ОТП и конкуренты</p>
+          <div class="chart-box"><canvas id="compDynChart"></canvas></div>
+        </section>
+        <section class="panel">
+          <h2>Доля голоса брендов</h2>
+          <p class="chart-note">Сравнение объёма брендовых запросов за выбранный период</p>
+          <div class="chart-box"><canvas id="compShareChart"></canvas></div>
+        </section>
+      </div>
 
       <div class="grid-2">
         <section class="panel">
