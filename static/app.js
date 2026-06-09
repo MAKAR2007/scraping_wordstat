@@ -584,9 +584,9 @@ function aggSeries(series, period) {
 
 function renderCompetition() {
   const comp = state.competitors || [];
-  const sect = $("competitionSection");
-  if (comp.length < 2) { sect.classList.add("hidden"); return; }
-  sect.classList.remove("hidden");
+  const sect = $("competitionSection"), eyebrow = $("competitionEyebrow");
+  if (comp.length < 2) { sect.classList.add("hidden"); eyebrow.classList.add("hidden"); return; }
+  sect.classList.remove("hidden"); eyebrow.classList.remove("hidden");
   const period = periodKey(), b = currentBucket();
   const labels = aggSeries(comp[0].series, period).labels;
 
@@ -627,8 +627,9 @@ function renderCompetition() {
   const otpI = comp.findIndex((c) => c.isOtp);
   const leadI = vals.indexOf(Math.max(...vals));
   $("competitionNote").textContent =
-    "Доля голоса ОТП среди брендов: " + (vals[otpI] / total * 100).toFixed(1).replace(".", ",") +
-    "% (за " + b.label + "). Лидер категории — " + comp[leadI].brand + ".";
+    "Доля голоса ОТП по этой фразе: " + (vals[otpI] / total * 100).toFixed(1).replace(".", ",") +
+    "% (за " + b.label + "). Лидер по фразе «кредитная карта + банк» — " + comp[leadI].brand +
+    " (это не общий рейтинг бренда).";
 }
 
 function renderDistChart() {
