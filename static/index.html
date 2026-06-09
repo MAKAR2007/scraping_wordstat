@@ -81,65 +81,57 @@
         <div class="stat-card stat-card--otp-soft">
           <span class="stat-label">Лидер · ОТП</span>
           <span id="statLeaderOtp" class="stat-value stat-value--sm">—</span>
-          <span class="stat-foot">регион №1 по спросу ОТП</span>
+          <span class="stat-foot" id="statLeaderOtpFoot">регион №1 по спросу ОТП</span>
         </div>
       </section>
 
       <!-- Блок 2: динамика и пики -->
       <p class="section-eyebrow">Динамика и исторические пики</p>
       <section class="stats">
-        <div class="stat-card">
+        <div class="stat-card stat-card--market">
           <span class="stat-label">Динамика · рынок</span>
           <span id="growthMarket" class="stat-value">—</span>
           <span class="stat-foot" id="growthMarketFoot">за период</span>
         </div>
-        <div class="stat-card">
+        <div class="stat-card stat-card--otp">
           <span class="stat-label">Динамика · ОТП</span>
           <span id="growthOtp" class="stat-value">—</span>
           <span class="stat-foot" id="growthOtpFoot">за период</span>
         </div>
-        <div class="stat-card">
+        <div class="stat-card stat-card--market">
           <span class="stat-label">Пик спроса · рынок</span>
           <span id="peakMarket" class="stat-value">—</span>
           <span class="stat-foot" id="peakMarketFoot">—</span>
         </div>
-        <div class="stat-card">
+        <div class="stat-card stat-card--otp">
           <span class="stat-label">Пик спроса · ОТП</span>
           <span id="peakOtp" class="stat-value">—</span>
           <span class="stat-foot" id="peakOtpFoot">—</span>
         </div>
       </section>
 
-      <!-- Концентрация спроса -->
+      <!-- Блок 3: концентрация спроса -->
       <p class="section-eyebrow">Концентрация спроса по регионам</p>
-      <section class="panel">
-        <div class="panel-head">
-          <div>
-            <h2>Концентрация спроса</h2>
-            <p class="chart-note" id="strategicNote">Насколько спрос сосредоточен в крупнейших регионах</p>
-          </div>
+      <section class="stats">
+        <div class="stat-card stat-card--accent">
+          <span class="stat-label">Топ-5 · рынок</span>
+          <span id="kpiConcMarket" class="stat-value">—</span>
+          <span class="stat-foot">доля топ-5 регионов в спросе рынка</span>
         </div>
-        <div class="stats stats--flat">
-          <div class="stat-card stat-card--plain">
-            <span class="stat-label">Топ-5 · рынок</span>
-            <span id="kpiConcMarket" class="stat-value stat-value--md">—</span>
-            <span class="stat-foot">доля топ-5 регионов в спросе рынка</span>
-          </div>
-          <div class="stat-card stat-card--plain">
-            <span class="stat-label">Топ-5 · ОТП</span>
-            <span id="kpiConcOtp" class="stat-value stat-value--md">—</span>
-            <span class="stat-foot">доля топ-5 регионов в спросе ОТП</span>
-          </div>
-          <div class="stat-card stat-card--plain">
-            <span class="stat-label">Индекс HHI · рынок</span>
-            <span id="kpiHhi" class="stat-value stat-value--md">—</span>
-            <span class="stat-foot">Херфиндаля–Хиршмана, 0–10 000</span>
-          </div>
-          <div class="stat-card stat-card--plain">
-            <span class="stat-label">Широта спроса</span>
-            <span id="kpiBreadth" class="stat-value stat-value--md">—</span>
-            <span class="stat-foot">субъектов формируют 80% спроса</span>
-          </div>
+        <div class="stat-card stat-card--accent">
+          <span class="stat-label">Топ-5 · ОТП</span>
+          <span id="kpiConcOtp" class="stat-value">—</span>
+          <span class="stat-foot">доля топ-5 регионов в спросе ОТП</span>
+        </div>
+        <div class="stat-card stat-card--accent">
+          <span class="stat-label">Индекс HHI · рынок</span>
+          <span id="kpiHhi" class="stat-value">—</span>
+          <span class="stat-foot">Херфиндаля–Хиршмана, 0–10 000</span>
+        </div>
+        <div class="stat-card stat-card--accent">
+          <span class="stat-label">Широта спроса</span>
+          <span id="kpiBreadth" class="stat-value">—</span>
+          <span class="stat-foot">субъектов формируют 80% спроса</span>
         </div>
       </section>
 

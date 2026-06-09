@@ -313,6 +313,13 @@ function renderLeaders() {
   $("statLeader").textContent = state.regions[0] ? state.regions[0].name : "—";
   const lo = state.regions.reduce((a, b) => (!a || b.otp > a.otp ? b : a), null);
   $("statLeaderOtp").textContent = lo ? lo.name : "—";
+  // Снизу — лидер по рыночной доле ОТП (макс. проникновение среди значимых
+  // регионов, чтобы малые регионы с шумной долей не вылезали).
+  const pool = state.regions.filter((r) => r.market > 0).slice(0, 40);
+  const lp = pool.reduce((a, b) => (!a || b.penetration > a.penetration ? b : a), null);
+  $("statLeaderOtpFoot").textContent = lp
+    ? "макс. доля ОТП: " + lp.name + " · " + fmtPct(lp.penetration)
+    : "регион №1 по спросу ОТП";
 }
 
 function renderKpi() {
@@ -382,9 +389,7 @@ function renderStrategicKpis() {
   $("kpiConcMarket").textContent = pctTxt(top5m / totM * 100);
   $("kpiConcOtp").textContent = pctTxt(top5o / totO * 100);
   $("kpiHhi").textContent = hhi.toLocaleString("ru-RU");
-  $("kpiBreadth").textContent = breadth + " рег.";
-  $("strategicNote").textContent =
-    "Топ-5 регионов формируют " + pctTxt(top5m / totM * 100) + " спроса; 80% спроса дают " + breadth + " субъектов РФ.";
+  $("kpiBreadth").textContent = breadth + " регионов";
 }
 
 // ----------------------------------------------------- регионы: рынок+ОТП --
