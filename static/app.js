@@ -6,6 +6,7 @@ let state = {
   marketPhrase: "", otpPhrase: "", year: null,
   subjects: [], hist: { keys: [], labels: [], market: [], otp: [] },
   regions: [], dynRegion: "ALL", bucketLabel: "", competitors: [],
+  source: "", queryPhrase: "", knownPhrases: [],
 };
 let charts = {};
 let topLimit = 15;
@@ -108,8 +109,12 @@ async function onSearch(e) {
     state.subjects = data.subjects || [];
     state.competitors = data.competitors || [];
     state.hist = data.dynamics || { keys: [], labels: [], market: [], otp: [] };
+    state.source = data.source || "";
+    state.queryPhrase = data.queryPhrase || "";
+    state.knownPhrases = data.knownPhrases || [];
     state.dynRegion = "ALL";
     excluded.clear();
+    renderBanner();
     populateRegionSelect();
     renderExcludeChips();
     renderAll();
@@ -120,6 +125,26 @@ async function onSearch(e) {
     $("loader").classList.add("hidden");
     $("searchBtn").disabled = false;
   }
+}
+
+function renderBanner() {
+  const el = $("dataBanner");
+  const norm = (s) => (s || "").toLowerCase().replace("ё", "е").trim();
+  if (state.source === "csv") {
+    if (norm(state.queryPhrase) !== norm(state.marketPhrase)) {
+      el.className = "banner banner--info";
+      el.innerHTML = "Показаны реальные данные ближайшего продукта: <b>" + state.marketPhrase + "</b>.";
+      el.classList.remove("hidden");
+    } else { el.classList.add("hidden"); }
+    return;
+  }
+  if (state.source === "api") { el.classList.add("hidden"); return; }
+  // synthetic
+  el.className = "banner banner--warn";
+  el.innerHTML = "⚠ <b>Демонстрационные данные.</b> Реальные данные доступны только для: <b>" +
+    (state.knownPhrases || []).join(", ") + "</b>. Для произвольных запросов нужен рабочий ключ Yandex Wordstat API " +
+    "(сейчас приложение работает в демо-режиме).";
+  el.classList.remove("hidden");
 }
 
 function renderAll() {
@@ -212,11 +237,16 @@ function fixSumClamped(arr, target, caps) {
   }
 }
 
-// Концентрация спроса по устройству: десктоп смещён в столицы (выше gamma →
-// концентрированнее), мобайл более распределён. Делает концентрацию реактивной.
+// Концентрация спроса реагирует на устройство и период анализа через gamma-
+// преобразование весов. Год+«Все устройства» = эталон (Москва ~14,9%, столбцы
+// не искажены); короткие периоды и десктоп — концентрированнее.
 function deviceGamma() {
   return ({ DEVICE_ALL: 1, DEVICE_DESKTOP: 1.18, DEVICE_PHONE: 0.9, DEVICE_TABLET: 1.06 })[$("device").value] || 1;
 }
+function periodGamma() {
+  return ({ year: 1, quarter: 1.05, month: 1.1 })[periodKey()] || 1;
+}
+function concentrationGamma() { return deviceGamma() * periodGamma(); }
 function visibleRegions() { return state.regions.filter((r) => !excluded.has(r.id)); }
 
 // Распределение тотала РФ по субъектам по РЕАЛЬНЫМ весам (население/спрос):
@@ -224,7 +254,7 @@ function visibleRegions() { return state.regions.filter((r) => !excluded.has(r.i
 // ОТП по региону ∝ рынку с умеренной детерминированной вариацией доли.
 function computeRegions(subjects, M, O) {
   if (!subjects.length) return [];
-  const g = deviceGamma();
+  const g = concentrationGamma();
   const w = subjects.map((s) => Math.pow(s.weight || 1e-4, g));
   const sw = w.reduce((a, b) => a + b, 0) || 1;
   const market = subjects.map((s, i) => Math.max(0, Math.round(M * w[i] / sw)));
@@ -252,7 +282,7 @@ function recomputeRegions() {
 function regionFractions(regionId) {
   const i = state.subjects.findIndex((s) => s.id === regionId);
   if (i < 0) return { fm: 1, fo: 1 };
-  const g = deviceGamma();
+  const g = concentrationGamma();
   const wm = state.subjects.map((s) => Math.pow(s.weight || 1e-4, g));
   const wo = state.subjects.map((s, j) => wm[j] * (0.65 + 0.7 * rand01(s.id + "|otp")));
   const swm = wm.reduce((a, b) => a + b, 0) || 1, swo = wo.reduce((a, b) => a + b, 0) || 1;
@@ -474,24 +504,45 @@ function renderGrowthIndexChart() {
   });
 }
 
+// Сглаживание Хольта с демпфированным трендом (экспоненциальное сглаживание
+// уровня и тренда) — устойчивее линейной регрессии на коротком горизонте.
+function holtDamped(y, h, alpha = 0.45, beta = 0.22, phi = 0.9) {
+  const n = y.length;
+  if (n < 3) { const last = y[n - 1] || 0; return { fc: new Array(h).fill(last), sigma: 0 }; }
+  let level = y[0], trend = y[1] - y[0];
+  const fitted = [];
+  for (let i = 1; i < n; i++) {
+    const prev = level, fhat = level + phi * trend;
+    fitted.push(fhat);
+    level = alpha * y[i] + (1 - alpha) * fhat;
+    trend = beta * (level - prev) + (1 - beta) * phi * trend;
+  }
+  let ss = 0, c = 0;
+  for (let i = 1; i < n; i++) { const e = y[i] - fitted[i - 1]; if (isFinite(e)) { ss += e * e; c++; } }
+  const sigma = Math.sqrt(ss / Math.max(1, c - 1)) || 0;
+  const fc = []; let acc = 0, pk = 1;
+  for (let k = 1; k <= h; k++) { pk *= phi; acc += pk; fc.push(level + acc * trend); }
+  return { fc, sigma };
+}
+
 function renderForecastChart() {
   const h = state.hist;
   const share = h.market.map((m, i) => (m ? h.otp[i] / m * 100 : 0));
   const n = share.length, lastK = Math.min(24, n), start = n - lastK;
   const histLabels = h.labels.slice(start), histShare = share.slice(start);
-  const fit = linreg(histShare);
-  // Доверительный коридор: ±1.5σ остатков тренда (а не «голая» линия).
-  let ss = 0; for (let i = 0; i < histShare.length; i++) { const e = histShare[i] - (fit.slope * i + fit.intercept); ss += e * e; }
-  const band = 1.5 * Math.sqrt(ss / Math.max(1, histShare.length - 2));
-  const K = 6, futLabels = nextMonthLabels(h.keys[n - 1], K);
+  const K = 6, z = 1.28;          // ~80% интервал
+  const { fc, sigma } = holtDamped(histShare, K);
+  const futLabels = nextMonthLabels(h.keys[n - 1], K);
   const labels = histLabels.concat(futLabels);
   const actual = histShare.concat(new Array(K).fill(null));
-  const central = new Array(lastK - 1).fill(null), upper = new Array(lastK - 1).fill(null), lower = new Array(lastK - 1).fill(null);
   const lastVal = histShare[histShare.length - 1];
-  central.push(lastVal); upper.push(lastVal); lower.push(lastVal);
+  const pad = new Array(lastK - 1).fill(null);
+  const base = pad.concat([lastVal]), opt = pad.concat([lastVal]), pess = pad.concat([lastVal]);
   for (let k = 1; k <= K; k++) {
-    const c = Math.max(0, fit.slope * (lastK - 1 + k) + fit.intercept);
-    central.push(c); upper.push(c + band); lower.push(Math.max(0, c - band));
+    const spread = z * sigma * Math.sqrt(k);
+    base.push(Math.max(0, fc[k - 1]));
+    opt.push(Math.max(0, fc[k - 1] + spread));
+    pess.push(Math.max(0, fc[k - 1] - spread));
   }
   destroy("forecast");
   charts.forecast = new Chart($("forecastChart"), {
@@ -500,18 +551,22 @@ function renderForecastChart() {
       labels,
       datasets: [
         { label: "Факт", data: actual, borderColor: C.otp, backgroundColor: C.otpSoft, fill: true, tension: .3, pointRadius: 0, borderWidth: 2.5 },
-        { label: "Прогноз", data: central, borderColor: C.orange, borderDash: [6, 5], backgroundColor: "transparent", tension: .2, pointRadius: 0, borderWidth: 2.5 },
-        { label: "_upper", data: upper, borderColor: "transparent", pointRadius: 0, fill: false },
-        { label: "Коридор ±", data: lower, borderColor: "transparent", pointRadius: 0, backgroundColor: "rgba(255,122,26,.13)", fill: 2, tension: .2 },
+        { label: "Оптимистичный", data: opt, borderColor: "#18a558", borderDash: [4, 4], backgroundColor: "transparent", fill: false, tension: .25, pointRadius: 0, borderWidth: 1.8 },
+        { label: "_band", data: pess, borderColor: "transparent", backgroundColor: "rgba(120,130,150,.12)", fill: 1, tension: .25, pointRadius: 0 },
+        { label: "Базовый", data: base, borderColor: C.orange, borderDash: [6, 5], backgroundColor: "transparent", fill: false, tension: .25, pointRadius: 0, borderWidth: 2.6 },
+        { label: "Пессимистичный", data: pess, borderColor: "#e23b2e", borderDash: [4, 4], backgroundColor: "transparent", fill: false, tension: .25, pointRadius: 0, borderWidth: 1.8 },
       ],
     },
     options: {
       responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
       plugins: {
         legend: { display: true, position: "top", labels: { boxWidth: 12, font: { weight: 700 }, filter: (it) => !it.text.startsWith("_") } },
-        tooltip: { callbacks: { label: (c) => (c.parsed.y == null || c.dataset.label.startsWith("_")) ? "" : " " + c.dataset.label + ": " + c.parsed.y.toFixed(2).replace(".", ",") + "%" } },
+        tooltip: { callbacks: { label: (c) => (c.parsed.y == null || c.dataset.label.startsWith("_")) ? "" : " " + c.dataset.label + ": " + c.parsed.y.toFixed(3).replace(".", ",") + "%" } },
       },
-      scales: { x: { ticks: { maxRotation: 50, minRotation: 45, autoSkip: true, font: { size: 10 } } }, y: { ticks: { callback: (v) => v.toFixed(1).replace(".", ",") + "%" } } },
+      scales: {
+        x: { ticks: { maxRotation: 50, minRotation: 45, autoSkip: true, font: { size: 10 } } },
+        y: { grace: "8%", ticks: { callback: (v) => v.toFixed(2).replace(".", ",") + "%" } },
+      },
     },
   });
 }
@@ -633,7 +688,7 @@ function renderOpportunityChart() {
     const lead = r.market >= medX && r.penetration >= medY;
     const niche = r.market < medX && r.penetration >= medY;
     const color = opp ? C.orange : lead ? C.market : niche ? C.otp : "#AEB6C4";
-    return { x: r.market, y: r.penetration, r: 5 + Math.sqrt(r.otp / maxO) * 16, name: r.name, otp: r.otp, color };
+    return { x: r.market, y: r.penetration, r: 5 + Math.sqrt(r.otp / maxO) * 16, name: r.name, id: r.id, otp: r.otp, color };
   });
   destroy("opportunity");
   charts.opportunity = new Chart($("opportunityChart"), {
@@ -641,9 +696,15 @@ function renderOpportunityChart() {
     data: { datasets: [{ data: pts, backgroundColor: pts.map((p) => hexA(p.color, .55)), borderColor: pts.map((p) => p.color), borderWidth: 1.5 }] },
     options: {
       responsive: true, maintainAspectRatio: false,
+      onClick: (e, els, chart) => {
+        if (!els.length) return;
+        const p = chart.data.datasets[0].data[els[0].index];
+        if (p && p.id) { excluded.add(p.id); renderExcludeChips(); renderExclusionViews(); }
+      },
+      onHover: (e, els) => { e.native.target.style.cursor = els.length ? "pointer" : "default"; },
       plugins: {
         legend: { display: false }, quad: { medX, medY },
-        tooltip: { callbacks: { label: (c) => { const p = c.raw; return " " + p.name + ": рынок " + fmt(p.x) + ", доля ОТП " + p.y.toFixed(2).replace(".", ",") + "%, ОТП " + fmt(p.otp); } } },
+        tooltip: { callbacks: { label: (c) => { const p = c.raw; return " " + p.name + ": рынок " + fmt(p.x) + ", доля ОТП " + p.y.toFixed(2).replace(".", ",") + "%, ОТП " + fmt(p.otp) + "  (клик — исключить)"; } } },
       },
       scales: {
         x: { title: { display: true, text: "Спрос (рынок), показы" }, ticks: { callback: shortNum } },

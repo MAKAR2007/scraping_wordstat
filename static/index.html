@@ -56,6 +56,7 @@
     </section>
 
     <div id="error" class="error hidden"></div>
+    <div id="dataBanner" class="banner hidden"></div>
     <div id="loader" class="loader hidden"><span class="spinner"></span> Загрузка данных…</div>
 
     <div id="results" class="hidden">
@@ -191,7 +192,7 @@
         </section>
         <section class="panel">
           <h2>Прогноз доли ОТП</h2>
-          <p class="chart-note">Факт + прогноз на 6 месяцев с доверительным коридором (±1,5σ тренда)</p>
+          <p class="chart-note">Сглаживание Хольта (демпфированный тренд) на 6 мес. · 3 сценария: оптимистичный / базовый / пессимистичный</p>
           <div class="chart-box"><canvas id="forecastChart"></canvas></div>
         </section>
       </div>
@@ -200,7 +201,7 @@
         <div class="panel-head">
           <div>
             <h2>Матрица возможностей по регионам</h2>
-            <p class="chart-note" id="opportunityNote">Спрос (рынок) × проникновение ОТП. Размер точки — объём ОТП. Цель роста — правый-нижний угол: большой спрос при низкой доле ОТП.</p>
+            <p class="chart-note" id="opportunityNote">Спрос (рынок) × проникновение ОТП. Размер точки — объём ОТП. Цель роста — правый-нижний угол: большой спрос при низкой доле ОТП. <b>Клик по точке исключает регион.</b></p>
           </div>
         </div>
         <div class="chart-box chart-box--tall"><canvas id="opportunityChart"></canvas></div>

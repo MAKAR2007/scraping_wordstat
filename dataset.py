@@ -60,8 +60,15 @@ def _num(cell):
 
 def _norm(name):
     """Нормализует название: lower, убирает '(оверолл)', схлопывает пробелы."""
-    s = (name or "").lower().replace("(оверолл)", "")
+    s = (name or "").lower().replace("(оверолл)", "").replace("ё", "е")
     return re.sub(r"\s+", " ", s).strip()
+
+
+def _stemset(name):
+    """Грубые основы слов (первые 4 буквы значимых токенов) — для сопоставления
+    форм («кредитная карта» ↔ «кредитные карты»)."""
+    toks = [t for t in re.sub(r"[^а-я ]", " ", _norm(name)).split() if len(t) > 2]
+    return frozenset(t[:4] for t in toks)
 
 
 def _parse_month(label):
@@ -140,13 +147,29 @@ def _load():
 
     _cache["products"] = products
     _cache["month_cols"] = month_cols
+    _cache["stem_index"] = {_stemset(p["base"]): k for k, p in products.items()}
     return products
 
 
 # --------------------------------------------------------------- queries ---
 def lookup(phrase):
-    """Нормализованная фраза -> ключ продукта в CSV (или None)."""
-    return _norm(phrase) if _norm(phrase) in _load() else None
+    """Фраза -> ключ продукта в CSV. Точное совпадение, иначе по основам слов
+    (учитывает падежи/число: «кредитная карта» → «Кредитные карты»)."""
+    prods = _load()
+    n = _norm(phrase)
+    if n in prods:
+        return n
+    ss = _stemset(phrase)
+    if not ss:
+        return None
+    idx = _cache.get("stem_index", {})
+    if ss in idx:
+        return idx[ss]
+    # Фраза содержит все ключевые основы продукта (напр. «оформить кредитную карту»).
+    for stem, key in idx.items():
+        if stem and stem.issubset(ss):
+            return key
+    return None
 
 
 def product(key):

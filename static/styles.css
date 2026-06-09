@@ -252,6 +252,13 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   background: #fdecec; border: 1px solid #f3c0c0; color: #a11414;
   padding: 13px 18px; border-radius: var(--radius-sm); margin-bottom: 18px; font-weight: 600;
 }
+.banner {
+  padding: 13px 18px; border-radius: var(--radius-sm); margin-bottom: 18px;
+  font-size: 13px; font-weight: 600; line-height: 1.45; border: 1px solid transparent;
+}
+.banner b { font-weight: 800; }
+.banner--warn { background: var(--orange-soft); border-color: #ffd2a8; color: #9a4d06; }
+.banner--info { background: var(--brand-soft); border-color: #cfe6ac; color: var(--brand-dark); }
 
 .footer { text-align: center; color: var(--muted); font-size: 12px; padding: 26px; font-weight: 500; }
 .hidden { display: none !important; }

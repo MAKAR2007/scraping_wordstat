@@ -106,10 +106,17 @@ def search():
             "series": [int(round(v * of)) for v in brand["series"]],
         })
 
+    # Источник: реальная выгрузка (CSV) для известных продуктов, иначе — демо.
+    source = "csv" if (client.demo_mode and dataset.lookup(phrase)) else (
+        "api" if not client.demo_mode else "synthetic")
+
     return jsonify({
         "marketPhrase": base,
         "otpPhrase": otp_name,
         "demo": client.demo_mode,
+        "source": source,
+        "queryPhrase": phrase,
+        "knownPhrases": dataset.known_phrases(),
         "year": year,
         "subjects": subjects,
         "competitors": competitors,
