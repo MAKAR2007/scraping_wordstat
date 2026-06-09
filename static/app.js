@@ -9,6 +9,7 @@ let state = {
 };
 let charts = {};
 let topLimit = 15;
+let excluded = new Set();   // id субъектов, исключённых из части графиков
 
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => Math.round(n || 0).toLocaleString("ru-RU");
@@ -61,6 +62,10 @@ document.addEventListener("DOMContentLoaded", () => {
   $("exportBtn").addEventListener("click", onExport);
   $("tableFilter").addEventListener("input", renderRegionsTable);
   $("dynRegion").addEventListener("change", () => { state.dynRegion = $("dynRegion").value || "ALL"; renderDynamicsChart(); });
+  $("excludeSelect").addEventListener("change", (e) => {
+    const id = e.target.value;
+    if (id) { excluded.add(id); e.target.value = ""; renderExcludeChips(); renderExclusionViews(); }
+  });
   $("device").addEventListener("change", () => { if (state.marketPhrase) $("searchForm").requestSubmit(); });
   $("period").addEventListener("change", () => { if (state.marketPhrase) onPeriodChange(); });
   document.querySelectorAll(".toggle-btn").forEach((b) => {
@@ -104,7 +109,9 @@ async function onSearch(e) {
     state.competitors = data.competitors || [];
     state.hist = data.dynamics || { keys: [], labels: [], market: [], otp: [] };
     state.dynRegion = "ALL";
+    excluded.clear();
     populateRegionSelect();
+    renderExcludeChips();
     renderAll();
     $("results").classList.remove("hidden");
   } catch (err) {
@@ -205,12 +212,20 @@ function fixSumClamped(arr, target, caps) {
   }
 }
 
+// Концентрация спроса по устройству: десктоп смещён в столицы (выше gamma →
+// концентрированнее), мобайл более распределён. Делает концентрацию реактивной.
+function deviceGamma() {
+  return ({ DEVICE_ALL: 1, DEVICE_DESKTOP: 1.18, DEVICE_PHONE: 0.9, DEVICE_TABLET: 1.06 })[$("device").value] || 1;
+}
+function visibleRegions() { return state.regions.filter((r) => !excluded.has(r.id)); }
+
 // Распределение тотала РФ по субъектам по РЕАЛЬНЫМ весам (население/спрос):
 // Москва — №1 (~15%), пропорции стабильны, период лишь масштабирует объёмы.
 // ОТП по региону ∝ рынку с умеренной детерминированной вариацией доли.
 function computeRegions(subjects, M, O) {
   if (!subjects.length) return [];
-  const w = subjects.map((s) => s.weight || 1e-4);
+  const g = deviceGamma();
+  const w = subjects.map((s) => Math.pow(s.weight || 1e-4, g));
   const sw = w.reduce((a, b) => a + b, 0) || 1;
   const market = subjects.map((s, i) => Math.max(0, Math.round(M * w[i] / sw)));
   fixSum(market, M);
@@ -237,20 +252,30 @@ function recomputeRegions() {
 function regionFractions(regionId) {
   const i = state.subjects.findIndex((s) => s.id === regionId);
   if (i < 0) return { fm: 1, fo: 1 };
-  const wm = state.subjects.map((s) => s.weight || 1e-4);
+  const g = deviceGamma();
+  const wm = state.subjects.map((s) => Math.pow(s.weight || 1e-4, g));
   const wo = state.subjects.map((s, j) => wm[j] * (0.65 + 0.7 * rand01(s.id + "|otp")));
   const swm = wm.reduce((a, b) => a + b, 0) || 1, swo = wo.reduce((a, b) => a + b, 0) || 1;
   return { fm: wm[i] / swm, fo: wo[i] / swo };
 }
 
+function scaleHist(h, fm, fo) {
+  return { keys: h.keys, labels: h.labels, market: h.market.map((v) => Math.round(v * fm)), otp: h.otp.map((v) => Math.round(v * fo)) };
+}
+
 function currentDynHist() {
-  if (state.dynRegion === "ALL") return state.hist;
-  const { fm, fo } = regionFractions(state.dynRegion);
-  return {
-    keys: state.hist.keys, labels: state.hist.labels,
-    market: state.hist.market.map((v) => Math.round(v * fm)),
-    otp: state.hist.otp.map((v) => Math.round(v * fo)),
-  };
+  if (state.dynRegion !== "ALL") {
+    const { fm, fo } = regionFractions(state.dynRegion);
+    return scaleHist(state.hist, fm, fo);
+  }
+  if (excluded.size) {
+    const totM = state.regions.reduce((a, r) => a + r.market, 0) || 1;
+    const totO = state.regions.reduce((a, r) => a + r.otp, 0) || 1;
+    const vis = visibleRegions();
+    const visM = vis.reduce((a, r) => a + r.market, 0), visO = vis.reduce((a, r) => a + r.otp, 0);
+    return scaleHist(state.hist, visM / totM, visO / totO);
+  }
+  return state.hist;
 }
 
 // --------------------------------------------------------------- KPI ряды --
@@ -283,13 +308,14 @@ function renderKpi() {
   const peak = (field) => {
     let hi = -1, hidx = -1;
     b.full.forEach((i) => { if (b.agg[field][i] > hi) { hi = b.agg[field][i]; hidx = i; } });
-    return { label: hidx >= 0 ? b.agg.labels[hidx] : "—", val: hi > 0 ? hi : 0 };
+    return { label: hidx >= 0 ? b.agg.labels[hidx] : "—", val: hi > 0 ? hi : 0, idx: hidx };
   };
   const unit = periodUnit(), pm = peak("market"), po = peak("otp");
   $("peakMarket").textContent = fmt(pm.val);
-  $("peakMarketFoot").textContent = "рекордный " + unit + " · " + pm.label;
+  $("peakMarketFoot").textContent = "максимум · " + pm.label;
+  const poShare = (po.idx >= 0 && b.agg.market[po.idx]) ? b.agg.otp[po.idx] / b.agg.market[po.idx] * 100 : 0;
   $("peakOtp").textContent = fmt(po.val);
-  $("peakOtpFoot").textContent = "рекордный " + unit + " · " + po.label;
+  $("peakOtpFoot").textContent = "максимум · " + po.label + " · доля рынка " + poShare.toFixed(2).replace(".", ",") + "%";
 }
 
 function renderStrategicKpis() {
@@ -304,33 +330,38 @@ function renderStrategicKpis() {
     return (Math.pow(b / a, 1 / yrs) - 1) * 100;
   };
   const cm = cagr(ya.market), co = cagr(ya.otp);
-  $("dynamicsCagr").textContent = "CAGR рынка " + (cm == null ? "—" : signPct(cm)) + " · ОТП " + (co == null ? "—" : signPct(co));
+  const setBadge = (id, v) => {
+    const el = $(id);
+    if (v == null) { el.textContent = "—"; el.className = "cagr-badge"; return; }
+    el.textContent = signPct(v); el.className = "cagr-badge " + (v >= 0 ? "is-up" : "is-down");
+  };
+  setBadge("cagrMarket", cm); setBadge("cagrOtp", co);
 
-  // Концентрация спроса.
+  // Концентрация спроса (реактивна к устройству через веса).
   const pctTxt = (v) => v.toFixed(1).replace(".", ",") + "%";
   const sm = [...state.regions].sort((a, b) => b.market - a.market);
   const totM = sm.reduce((a, r) => a + r.market, 0) || 1;
   const top5m = sm.slice(0, 5).reduce((a, r) => a + r.market, 0);
-  const top10m = sm.slice(0, 10).reduce((a, r) => a + r.market, 0);
   const so = [...state.regions].sort((a, b) => b.otp - a.otp);
   const totO = so.reduce((a, r) => a + r.otp, 0) || 1;
   const top5o = so.slice(0, 5).reduce((a, r) => a + r.otp, 0);
+  const hhi = Math.round(sm.reduce((a, r) => a + Math.pow(r.market / totM * 100, 2), 0));
   let acc = 0, breadth = 0;
   for (const r of sm) { acc += r.market; breadth++; if (acc >= totM * 0.8) break; }
 
   $("kpiConcMarket").textContent = pctTxt(top5m / totM * 100);
   $("kpiConcOtp").textContent = pctTxt(top5o / totO * 100);
-  $("kpiTop10").textContent = pctTxt(top10m / totM * 100);
+  $("kpiHhi").textContent = hhi.toLocaleString("ru-RU");
   $("kpiBreadth").textContent = breadth + " рег.";
   $("strategicNote").textContent =
-    "Топ-5 регионов формируют " + pctTxt(top5m / totM * 100) + " спроса рынка; 80% спроса дают " + breadth + " регионов.";
+    "Топ-5 регионов формируют " + pctTxt(top5m / totM * 100) + " спроса; 80% спроса дают " + breadth + " субъектов РФ.";
 }
 
 // ----------------------------------------------------- регионы: рынок+ОТП --
 function destroy(name) { if (charts[name]) { charts[name].destroy(); charts[name] = null; } }
 
 function renderRegionsChart() {
-  const rows = state.regions.slice(0, topLimit);
+  const rows = visibleRegions().slice(0, topLimit);
   $("regionsChart").parentElement.style.height = Math.max(420, rows.length * 27) + "px";
   destroy("regions");
   charts.regions = new Chart($("regionsChart"), {
@@ -338,12 +369,15 @@ function renderRegionsChart() {
     data: {
       labels: rows.map((r) => r.name),
       datasets: [
-        { key: "market", label: "Рынок", data: rows.map((r) => r.market), backgroundColor: C.market, borderRadius: 4, categoryPercentage: .76, barPercentage: .92 },
-        { key: "otp", label: "ОТП", data: rows.map((r) => r.otp), backgroundColor: C.otp, borderRadius: 4, categoryPercentage: .76, barPercentage: .92 },
+        // У рынка и ОТП разный масштаб (ОТП ~1% рынка), поэтому у ОТП своя
+        // верхняя ось — иначе его столбцы не видно.
+        { key: "market", label: "Рынок", data: rows.map((r) => r.market), backgroundColor: C.market, xAxisID: "x", borderRadius: 4, categoryPercentage: .74, barPercentage: .9 },
+        { key: "otp", label: "ОТП", data: rows.map((r) => r.otp), backgroundColor: C.otp, xAxisID: "x2", borderRadius: 4, categoryPercentage: .74, barPercentage: .9 },
       ],
     },
     options: {
       indexAxis: "y", responsive: true, maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
       plugins: {
         legend: { display: true, position: "top", labels: { boxWidth: 12, font: { weight: 700 } } },
         tooltip: { callbacks: { label: (ctx) => {
@@ -351,7 +385,11 @@ function renderRegionsChart() {
           return ctx.dataset.key === "market" ? "Рынок: " + fmt(r.market) : "ОТП: " + fmt(r.otp) + " · доля ОТП " + fmtPct(r.penetration);
         } } },
       },
-      scales: { x: { ticks: { callback: shortNum } }, y: { ticks: { autoSkip: false, font: { size: 11 } } } },
+      scales: {
+        x: { position: "bottom", title: { display: true, text: "Рынок", color: C.market }, ticks: { callback: shortNum, color: C.market }, grid: { color: "#f1f1f8" } },
+        x2: { position: "top", title: { display: true, text: "ОТП", color: C.otp }, ticks: { callback: shortNum, color: C.otp }, grid: { drawOnChartArea: false } },
+        y: { ticks: { autoSkip: false, font: { size: 11 } } },
+      },
     },
   });
 }
@@ -534,7 +572,7 @@ function renderCompetition() {
 }
 
 function renderDistChart() {
-  const { labels, data } = buildHistogram(state.regions.map((r) => r.market));
+  const { labels, data } = buildHistogram(visibleRegions().map((r) => r.market));
   destroy("dist");
   charts.dist = new Chart($("distChart"), {
     type: "bar",
@@ -584,7 +622,7 @@ function renderSeasonalityChart(metric, canvasId, chartKey) {
 }
 
 function renderOpportunityChart() {
-  const regs = [...state.regions].sort((a, b) => b.market - a.market).slice(0, 40).filter((r) => r.market > 0);
+  const regs = visibleRegions().sort((a, b) => b.market - a.market).slice(0, 40).filter((r) => r.market > 0);
   const median = (arr) => { const s = [...arr].sort((a, b) => a - b), n = s.length; return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : 0; };
   const medX = median(regs.map((r) => r.market));
   const totM = regs.reduce((a, r) => a + r.market, 0), totO = regs.reduce((a, r) => a + r.otp, 0);
@@ -677,6 +715,33 @@ function populateRegionSelect() {
   optAll.value = "ALL"; optAll.textContent = "Все регионы РФ"; sel.appendChild(optAll);
   state.subjects.forEach((s) => { const o = document.createElement("option"); o.value = s.id; o.textContent = s.name; sel.appendChild(o); });
   sel.value = [...sel.options].some((o) => o.value === prev) ? prev : "ALL";
+
+  const ex = $("excludeSelect");
+  ex.innerHTML = '<option value="">+ исключить регион…</option>';
+  state.subjects.forEach((s) => { const o = document.createElement("option"); o.value = s.id; o.textContent = s.name; ex.appendChild(o); });
+}
+
+// Исключение регионов влияет на: распределение по регионам, матрицу
+// возможностей, гистограмму спроса и агрегатную динамику частоты.
+function renderExclusionViews() {
+  renderRegionsChart();
+  renderOpportunityChart();
+  renderDistChart();
+  renderDynamicsChart();
+}
+
+function renderExcludeChips() {
+  const box = $("excludeChips");
+  box.innerHTML = "";
+  const byId = Object.fromEntries(state.subjects.map((s) => [s.id, s.name]));
+  [...excluded].forEach((id) => {
+    const chip = document.createElement("button");
+    chip.type = "button"; chip.className = "chip";
+    chip.innerHTML = byId[id] + ' <span aria-hidden="true">×</span>';
+    chip.addEventListener("click", () => { excluded.delete(id); renderExcludeChips(); renderExclusionViews(); });
+    box.appendChild(chip);
+  });
+  box.classList.toggle("hidden", excluded.size === 0);
 }
 
 async function onExport() {
@@ -727,10 +792,16 @@ function niceStep(raw) {
 }
 function buildHistogram(counts) {
   if (!counts.length) return { labels: [], data: [] };
-  const max = Math.max(...counts), step = niceStep(max / 8) || 1;
-  const bins = Math.max(1, Math.ceil((max + 1) / step)), data = new Array(bins).fill(0);
-  counts.forEach((c) => { let i = Math.floor(c / step); if (i >= bins) i = bins - 1; data[i]++; });
-  return { labels: data.map((_, i) => shortNum(i * step) + "–" + shortNum((i + 1) * step)), data };
+  // Робастный верх: 90-й перцентиль + overflow-бакет, чтобы выбросы (Москва)
+  // не «сплющивали» гистограмму влево.
+  const sorted = [...counts].sort((a, b) => a - b);
+  const p90 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.9))];
+  const step = niceStep(Math.max(1, p90) / 7) || 1;
+  const bins = Math.max(1, Math.round(p90 / step) || 1);
+  const data = new Array(bins + 1).fill(0);   // последний бакет — overflow «N+»
+  counts.forEach((c) => { let i = Math.floor(c / step); if (i > bins) i = bins; data[i]++; });
+  const labels = data.map((_, i) => i < bins ? shortNum(i * step) + "–" + shortNum((i + 1) * step) : shortNum(bins * step) + "+");
+  return { labels, data };
 }
 function showError(msg) {
   const el = $("error");
