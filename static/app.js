@@ -166,7 +166,6 @@ function renderAll() {
   renderKpi();
   renderLeaders();
   renderStrategicKpis();
-  renderInsights();
   renderPeriodViews();
   renderSeasonalityChart("market", "seasonalityChart", "seasonality");
   renderSeasonalityChart("otp", "seasonalityOtpChart", "seasonalityOtp");
@@ -183,7 +182,6 @@ function onPeriodChange() {
   renderKpi();
   renderLeaders();
   renderStrategicKpis();
-  renderInsights();
   renderPeriodViews();
 }
 
@@ -890,7 +888,7 @@ async function onExport() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         phrase: state.marketPhrase, otpPhrase: state.otpPhrase,
-        kpi, insights: state.lastInsights || [],
+        kpi,
         dynamics: state.hist, regions: state.regions,
         competitors: (state.competitors || []).map((c) => ({ brand: c.brand, series: c.series })),
         forecast: computeForecastData(),
@@ -922,104 +920,6 @@ function detectAnomalies(values) {
     if (Math.abs((v - mean) / sd) >= 2 && Math.abs(v) >= 20) out.push({ i: j + 1, pct: v });
   });
   return out;
-}
-
-// Выводы — синтез («что это значит и что делать»), а не пересказ KPI-карточек.
-function buildInsights() {
-  const out = [];
-  const pp = (v, d = 2) => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(d).replace(".", ",") + " п.п.";
-  const pc = (v, d = 1) => v.toFixed(d).replace(".", ",") + "%";
-  const ya = aggregate(state.hist, "year");
-  const full = [];
-  for (let i = 0; i < ya.counts.length; i++) if (ya.counts[i] >= 12) full.push(i);
-
-  // 1. Разрыв темпов: на сколько бренд обгоняет рынок и что это значит.
-  if (full.length >= 2) {
-    const i2 = full[full.length - 1], i1 = full[full.length - 2];
-    const gm = (ya.market[i2] - ya.market[i1]) / (ya.market[i1] || 1) * 100;
-    const go = (ya.otp[i2] - ya.otp[i1]) / (ya.otp[i1] || 1) * 100;
-    const gap = go - gm;
-    out.push({ tone: gap >= 0 ? "up" : "down",
-      text: gap >= 0
-        ? "ОТП опережает рынок на " + pp(gap, 1).replace(" п.п.", " п.п. темпа") + " — это органический набор доли, а не эффект растущей категории."
-        : "ОТП отстаёт от рынка на " + pp(Math.abs(gap), 1).replace("+", "").replace("−", "") + " темпа — без усиления кампаний доля будет размываться." });
-  }
-
-  // 2. Value Pool: где лежат деньги (а не где просто большой рынок).
-  const vp = valuePoolData();
-  const top3 = vp.rows.slice(0, 3).filter((r) => r.pool > 0);
-  if (top3.length) {
-    const sumPool = vp.rows.reduce((a, r) => a + r.pool, 0);
-    const otpTot = state.regions.reduce((a, r) => a + r.otp, 0) || 1;
-    out.push({ tone: "warn",
-      text: "Value Pool " + fmt(sumPool) + " запросов (" + pc(sumPool / otpTot * 100, 0) + " к текущему объёму ОТП). Быстрые победы: " +
-        top3.map((r) => r.name).join(", ") + " — добор до целевой доли " + pc(vp.target, 2) + " без борьбы за Москву." });
-  }
-
-  // 3. SoS: позиция бренда среди банков.
-  const bs = brandSeries();
-  if (bs) {
-    const idx = state.brandOtp.map((v, i) => (v != null ? i : -1)).filter((i) => i >= 0);
-    const li = idx[idx.length - 1];
-    const sum = bs.reduce((a, r) => a + (r.series[li] || 0), 0) || 1;
-    const o = bs.find((r) => r.brand === "ОТП").series[li] || 0;
-    const lead = bs.reduce((a, r) => ((r.series[li] || 0) > (a.series[li] || 0) ? r : a));
-    out.push({ tone: "info",
-      text: "Доля голоса (SoS) ОТП среди банков — " + pc(o / sum * 100, 2) + "; категорию держит " + lead.brand +
-        " (" + pc((lead.series[li] || 0) / sum * 100, 0) + "). SoS — опережающий индикатор будущей доли рынка." });
-  }
-
-  // 4. Качество роста: лиды vs сервис vs токсичность.
-  const sp = intentSplit().slice(-3);
-  const s = (f) => sp.reduce((a, x) => a + x[f], 0);
-  const tot3 = s("commercial") + s("service") + s("toxic") + s("other") || 1;
-  const ci = s("commercial") / tot3 * 100, sv = s("service") / tot3 * 100, tx = s("toxic") / tot3 * 100;
-  out.push({ tone: ci >= sv ? "up" : "warn",
-    text: ci >= sv
-      ? "Рост здоровый: " + pc(ci, 0) + " брендового спроса — продуктовые лиды; сервисная нагрузка " + pc(sv, 0) + ", токсичность " + pc(tx, 1) + "."
-      : "Рост обеспечен сервисным трафиком (" + pc(sv, 0) + " против " + pc(ci, 0) + " лидов) — это активность текущих клиентов, а не приток новых." });
-
-  // 5. Качество тренда: затухание после пиков.
-  const tq = trendQuality(state.hist.market);
-  if (tq.retention != null) {
-    out.push({ tone: tq.retention >= 70 ? "up" : tq.retention < 55 ? "down" : "warn",
-      text: "После всплесков спрос удерживает " + Math.round(tq.retention) + "% через 2 мес" +
-        (tq.retention < 55 ? " — «инфарктные» пики: хайп не конвертируется в устойчивый спрос." : " — кампании дают накопительный эффект.") +
-        (tq.run < 3 ? " Текущий тренд держится " + tq.run + " мес (<3) — рано считать его устойчивым." : "") });
-  }
-
-  // 6. Связь со ставкой ЦБ.
-  const rate = keyRateSeries(state.hist.keys);
-  const r = pearson(state.hist.market.slice(-36), rate.slice(-36));
-  if (r != null && Math.abs(r) >= 0.3) {
-    out.push({ tone: "info",
-      text: r < 0
-        ? "Спрос движется против ставки ЦБ (r = " + r.toFixed(2).replace(".", ",") + "): цикл смягчения ДКП — окно для наращивания кампаний."
-        : "Спрос следует за ставкой ЦБ (r = +" + r.toFixed(2).replace(".", ",") + "): категория растёт в дорогие деньги — спрос вынужденный." });
-  }
-
-  // 7. Прогноз: диапазон сценариев, а не точка.
-  const f = computeForecastData();
-  const lastA = [...f.actual].reverse().find((v) => v != null);
-  const lb = f.base[f.base.length - 1], lo = f.pess[f.pess.length - 1], hi = f.opt[f.opt.length - 1];
-  if (lastA != null && lb != null) {
-    out.push({ tone: lb - lastA >= 0 ? "up" : "down",
-      text: "Горизонт 6 мес: доля ОТП в коридоре " + pc(lo, 2) + "–" + pc(hi, 2) + " (базовый " + pc(lb, 2) + "). Ниже " + pc(lo, 2) + " — сигнал пересмотреть медиасплит." });
-  }
-  return out;
-}
-
-function renderInsights() {
-  const list = buildInsights();
-  state.lastInsights = list.map((x) => x.text);
-  const grid = $("insightsGrid");
-  grid.innerHTML = "";
-  list.forEach((x) => {
-    const div = document.createElement("div");
-    div.className = "insight insight--" + x.tone;
-    div.innerHTML = "<span>" + x.text + "</span>";
-    grid.appendChild(div);
-  });
 }
 
 // ------------------------------------------- бренды банков и SoS ----------
@@ -1078,13 +978,15 @@ function renderBrandSection() {
   $("brandOtpVal").textContent = fmt(oLast);
   $("brandOtpFoot").textContent = "за " + h.labels[li] + (oPrev ? " · " + signPct((oLast - oPrev) / oPrev * 100) + " г/г" : "");
 
+  // Чистые деления лог-оси (1/2/5 ×10ⁿ) — иначе подписи наползают друг на друга.
+  const LOG_TICKS = [100000, 200000, 500000, 1000000, 2000000, 5000000, 10000000, 20000000];
   destroy("brandDemand");
   charts.brandDemand = new Chart($("brandDemandChart"), {
     type: "line",
     data: { labels, datasets: rows.map((r) => ({
-      label: r.brand + (r.est ? " (оценка)" : ""), data: idx.map((i) => r.series[i]),
-      borderColor: brandColor(r.brand), backgroundColor: "transparent",
-      borderWidth: r.brand === "ОТП" ? 3.4 : 2, tension: .35, pointRadius: 0,
+      label: r.brand, data: idx.map((i) => r.series[i]),
+      borderColor: r.brand === "ОТП" ? C.otp : brandColor(r.brand), backgroundColor: "transparent",
+      borderWidth: r.brand === "ОТП" ? 3.6 : 2, tension: .35, pointRadius: 0,
     })) },
     options: {
       responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
@@ -1092,7 +994,8 @@ function renderBrandSection() {
         tooltip: { callbacks: { label: (c) => " " + c.dataset.label + ": " + fmt(c.parsed.y) } } },
       scales: {
         x: { ticks: { maxRotation: 50, minRotation: 45, autoSkip: true, font: { size: 10 } } },
-        y: { type: "logarithmic", ticks: { callback: shortNum } },
+        y: { type: "logarithmic", min: 100000, max: 20000000,
+          ticks: { autoSkip: false, callback: (v) => (LOG_TICKS.indexOf(v) >= 0 ? shortNum(v) : "") } },
       },
     },
   });
@@ -1153,22 +1056,18 @@ function renderQualityKpis() {
   const s = (f) => sp.reduce((a, x) => a + x[f], 0);
   const tot = s("commercial") + s("service") + s("toxic") + s("other") || 1;
   const ci = s("commercial") / tot, sv = s("service") / tot, tx = s("toxic") / tot;
+  // Цвет цифры берётся из акцента карточки (намерение/сервис/токсичность),
+  // а не из порогов — поэтому здесь только значения, без перекраски.
   const pct = (v) => (v * 100).toFixed(1).replace(".", ",") + "%";
   $("kpiIntent").textContent = pct(ci);
-  $("kpiIntent").className = "stat-value " + (ci >= 0.35 ? "growth-up" : "");
   $("kpiService").textContent = pct(sv);
-  $("kpiService").className = "stat-value " + (sv > 0.5 ? "growth-down" : "");
   $("kpiChurn").textContent = pct(tx);
-  $("kpiChurn").className = "stat-value " + (tx > 0.10 ? "growth-down" : tx <= 0.08 ? "growth-up" : "");
 
   const tq = trendQuality(state.hist.market);
-  const el = $("kpiTqi");
-  if (tq.retention == null) { el.textContent = "—"; el.className = "stat-value"; }
-  else {
-    el.textContent = Math.round(tq.retention) + "%";
-    el.className = "stat-value " + (tq.retention >= 70 ? "growth-up" : tq.retention < 55 ? "growth-down" : "");
-  }
-  $("kpiTqiFoot").textContent = "удержание после пика · тренд держится " + tq.run + " мес" + (tq.run < 3 ? " ⚠" : "");
+  $("kpiTqi").textContent = tq.retention == null ? "—" : Math.round(tq.retention) + "%";
+  $("kpiTqiFoot").textContent = tq.run < 3
+    ? "Сколько спроса остаётся через 2 месяца после рекламного всплеска. Текущий рост идёт " + tq.run + " мес — закрепится не факт."
+    : "Сколько спроса остаётся через 2 месяца после рекламного всплеска. Выше — спрос закрепляется, а не гаснет.";
 }
 
 function renderIntentChart() {

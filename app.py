@@ -305,12 +305,6 @@ def _build_workbook(p):
         if name.startswith("Доля"):
             cell.number_format = PCT
         row += 1
-    row += 1
-    ws.cell(row=row, column=1, value="Ключевые выводы").font = title_font
-    row += 1
-    for text in p.get("insights") or []:
-        ws.cell(row=row, column=1, value="• " + str(text))
-        row += 1
     ws.column_dimensions["A"].width = 34
     ws.column_dimensions["B"].width = 28
 

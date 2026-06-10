@@ -110,10 +110,6 @@
         </div>
       </section>
 
-      <!-- Ключевые выводы: синтез, а не пересказ цифр -->
-      <p class="section-eyebrow">Ключевые выводы</p>
-      <section class="insights" id="insightsGrid"></section>
-
       <!-- Блок 3: концентрация спроса -->
       <p class="section-eyebrow">Концентрация спроса по регионам</p>
       <section class="stats">
@@ -246,12 +242,12 @@
         <div class="grid-2">
           <section class="panel">
             <h2>Брендовый спрос банков</h2>
-            <p class="chart-note">«ОТП Банк» — реальные данные выгрузки; Сбер, Т-Банк, Альфа, ВТБ — оценка по порядкам Wordstat. Логарифмическая шкала, фирменные цвета банков.</p>
+            <p class="chart-note">Логарифмическая шкала.</p>
             <div class="chart-box"><canvas id="brandDemandChart"></canvas></div>
           </section>
           <section class="panel">
-            <h2>SoS · доля голоса ОТП во времени</h2>
-            <p class="chart-note">Доля брендовых запросов ОТП в сумме брендов пяти банков, %</p>
+            <h2>Доля голоса ОТП среди банков (SoS)</h2>
+            <p class="chart-note">Какая часть всех брендовых запросов пяти банков (ОТП + Сбер + Т‑Банк + Альфа + ВТБ) приходится на ОТП. Линия растёт — бренд набирает узнаваемость относительно конкурентов.</p>
             <div class="chart-box"><canvas id="sosChart"></canvas></div>
           </section>
         </div>
@@ -261,30 +257,29 @@
       <p class="section-eyebrow">Качество брендового спроса</p>
       <section class="stats">
         <div class="stat-card stat-card--market">
-          <span class="stat-label">Индекс намерения (лиды)</span>
+          <span class="stat-label">Доля «лидов» (намерение купить)</span>
           <span id="kpiIntent" class="stat-value">—</span>
-          <span class="stat-foot">оформить, заказать, условия, тарифы, кэшбэк…</span>
+          <span class="stat-foot">Запросы вида «оформить, заказать, условия, тарифы, кэшбэк». Чем выше — тем больше новых клиентов.</span>
         </div>
-        <div class="stat-card">
-          <span class="stat-label">Сервисная нагрузка</span>
+        <div class="stat-card stat-card--slate">
+          <span class="stat-label">Доля сервисных запросов</span>
           <span id="kpiService" class="stat-value">—</span>
-          <span class="stat-foot">войти, личный кабинет, приложение, активировать…</span>
+          <span class="stat-foot">Запросы вида «войти, личный кабинет, приложение, активировать». Это действующие клиенты, а не новые.</span>
         </div>
-        <div class="stat-card">
-          <span class="stat-label">Индекс токсичности</span>
+        <div class="stat-card stat-card--risk">
+          <span class="stat-label">Доля токсичных запросов</span>
           <span id="kpiChurn" class="stat-value">—</span>
-          <span class="stat-foot">закрыть, заблокировали, мошенники, обман, отзывы…</span>
+          <span class="stat-foot">Запросы вида «закрыть, заблокировали, мошенники, обман, отзывы». Сигнал оттока и репутационных рисков.</span>
         </div>
-        <div class="stat-card">
-          <span class="stat-label">Качество тренда (TQI)</span>
+        <div class="stat-card stat-card--accent">
+          <span class="stat-label">Удержание спроса после пика</span>
           <span id="kpiTqi" class="stat-value">—</span>
-          <span class="stat-foot" id="kpiTqiFoot">удержание спроса через 2 мес после пика</span>
+          <span class="stat-foot" id="kpiTqiFoot">Сколько спроса остаётся через 2 месяца после рекламного всплеска.</span>
         </div>
       </section>
       <div class="grid-2">
         <section class="panel">
           <h2>Структура спроса ОТП по интентам</h2>
-          <p class="chart-note">Продуктовый (лиды) / сервисный (текущие клиенты) / токсичный / прочее · последние 12 мес. В демо — модельная оценка, в рабочем режиме считается по topRequests.</p>
           <div class="chart-box"><canvas id="intentChart"></canvas></div>
         </section>
         <section class="panel">

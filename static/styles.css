@@ -155,6 +155,10 @@ input:focus, select:focus { border-color: var(--brand); box-shadow: 0 0 0 4px va
 .stat-card--otp-soft::before { background: linear-gradient(#9277F8, var(--violet)); }
 .stat-card--accent::before { background: linear-gradient(#FFB061, var(--orange-dark)); }
 .stat-card--accent .stat-value { color: var(--orange-dark); }
+.stat-card--slate::before { background: linear-gradient(#9AA4B8, #5C6678); }
+.stat-card--slate .stat-value { color: #3C4456; }
+.stat-card--risk::before { background: linear-gradient(#F2705F, #D2342A); }
+.stat-card--risk .stat-value { color: #D2342A; }
 .stat-label { color: var(--ink-2); font-size: 12.5px; font-weight: 700; letter-spacing: 0; }
 .stat-value { font-size: 26px; font-weight: 800; letter-spacing: -.6px; color: var(--ink); font-variant-numeric: tabular-nums; }
 .stat-value--sm { font-size: 18px; letter-spacing: -.2px; line-height: 1.2; }
@@ -166,7 +170,7 @@ input:focus, select:focus { border-color: var(--brand); box-shadow: 0 0 0 4px va
 .stat-card--plain::before { display: none; }
 .stat-card--market-soft::before { background: linear-gradient(#8CC63F, var(--brand-dark)); }
 .stat-card--market-soft .stat-value { color: var(--brand-dark); }
-.stat-foot { color: #4a5466; font-size: 12.5px; font-weight: 600; line-height: 1.35; }
+.stat-foot { color: #3C4456; font-size: 12.5px; font-weight: 600; line-height: 1.4; margin-top: 2px; }
 .stats--flat { margin-bottom: 0; }
 
 /* Заголовок-эйбрау над группой KPI (логическое разделение блоков). */
@@ -206,24 +210,6 @@ input:focus, select:focus { border-color: var(--brand); box-shadow: 0 0 0 4px va
 .chip:hover { background: #e3dcfd; }
 .chip span { font-size: 15px; line-height: 1; }
 .chart-note--hint { color: #7a8294; font-weight: 500; font-size: 11.5px; margin-top: 4px; }
-
-/* Ключевые выводы — в едином стиле карточек KPI (левая цветовая полоса). */
-.insights { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 22px; }
-.insight {
-  position: relative; overflow: hidden;
-  display: flex; align-items: center;
-  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 15px 18px 15px 22px; box-shadow: var(--shadow);
-  font-size: 13.5px; font-weight: 600; line-height: 1.5; color: var(--ink-2);
-}
-.insight::before {
-  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
-  background: var(--line-2);
-}
-.insight--up::before { background: linear-gradient(#2ec47a, #18a558); }
-.insight--down::before { background: linear-gradient(#f2705f, #e23b2e); }
-.insight--warn::before { background: linear-gradient(#FFB061, var(--orange-dark)); }
-.insight--info::before { background: linear-gradient(#6FA5F7, #3D7BF0); }
 
 /* Панель, растягивающая график на всю высоту соседа в grid-2. */
 .panel--fill { display: flex; flex-direction: column; }
@@ -325,7 +311,6 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 @media (max-width: 880px) {
   .grid-2 { grid-template-columns: 1fr; }
   .stats { grid-template-columns: repeat(2, 1fr); }
-  .insights { grid-template-columns: 1fr; }
   .chart-box--grow { min-height: 260px; }
   .topbar { padding: 14px 18px; }
   main { padding: 0 16px; }
