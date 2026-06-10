@@ -60,6 +60,10 @@
     <div id="loader" class="loader hidden"><span class="spinner"></span> Загрузка данных…</div>
 
     <div id="results" class="hidden">
+      <!-- Ключевые выводы (executive summary) -->
+      <p class="section-eyebrow">Ключевые выводы</p>
+      <section class="insights" id="insightsGrid"></section>
+
       <!-- Блок 1: объём и лидеры -->
       <p class="section-eyebrow">Объём спроса и лидеры</p>
       <section class="stats">
@@ -226,6 +230,20 @@
           <div class="chart-box"><canvas id="seasonalityOtpChart"></canvas></div>
         </section>
       </div>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Тепловая карта спроса · год × месяц</h2>
+            <p class="chart-note">Чем насыщеннее ячейка, тем выше спрос в этом месяце. Сразу видно сезонные пики и провалы.</p>
+          </div>
+          <div class="toggle" id="heatmapToggle">
+            <button class="toggle-btn active" data-metric="market">Рынок</button>
+            <button class="toggle-btn" data-metric="otp">ОТП</button>
+          </div>
+        </div>
+        <div id="heatmap" class="heatmap"></div>
+      </section>
 
       <div class="grid-2">
         <section class="panel">

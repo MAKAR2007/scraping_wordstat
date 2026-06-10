@@ -12,7 +12,7 @@ import sys
 
 from flask import Flask, jsonify, request, send_file
 
-from months import last_full_months, last_n_months
+from months import last_n_months
 
 
 def _load_dotenv():
@@ -130,20 +130,11 @@ def search():
 
 @app.route("/api/export", methods=["POST"])
 def export_excel():
+    """Расширенная выгрузка: Сводка (KPI + выводы), Динамика, Регионы,
+    Конкуренты, Прогноз, Сезонность — всё, что видно на дашборде."""
     payload = request.get_json(force=True, silent=True) or {}
     phrase = (payload.get("phrase") or "запрос").strip()
-    regions = payload.get("regions") or []
-    dynamics = payload.get("dynamics") or []
-
-    client = WordstatClient()
-    window = last_full_months()
-    region_ids = [str(r.get("id")) for r in regions if r.get("id") is not None]
-    try:
-        matrix = client.monthly_matrix(phrase, region_ids, window)
-    except YandexError:
-        matrix = {}
-
-    buffer = _build_workbook(phrase, regions, dynamics, window, matrix)
+    buffer = _build_workbook(payload)
     filename = "wordstat_%s.xlsx" % _safe_name(phrase)
     return send_file(
         buffer,
@@ -231,19 +222,23 @@ def _merge_regions(market_regions, otp_regions):
     return rows
 
 
-def _build_workbook(phrase, regions, dynamics, window, matrix):
+def _build_workbook(p):
+    """Книга из 6 листов по payload дашборда: Сводка, Динамика, Регионы,
+    Конкуренты, Прогноз, Сезонность. Пустые секции пропускаются."""
+    import datetime as _dt
+
     from openpyxl import Workbook
     from openpyxl.chart import BarChart, LineChart, Reference
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
-    month_labels = (window or {}).get("labels") or []
-    month_keys = (window or {}).get("months") or []
-    matrix = matrix or {}
-
+    GREEN, DARK = "52AE30", "20262E"
     wb = Workbook()
-    header_fill = PatternFill("solid", fgColor="7AB829")   # фирменный зелёный ОТП
+    header_fill = PatternFill("solid", fgColor=GREEN)
     header_font = Font(bold=True, color="FFFFFF")
+    title_font = Font(bold=True, size=14, color=DARK)
+    label_font = Font(bold=True, color=DARK)
+    NUM, PCT = "#,##0", "0.000%"
 
     def style_header(ws, row, ncols):
         for c in range(1, ncols + 1):
@@ -252,69 +247,178 @@ def _build_workbook(phrase, regions, dynamics, window, matrix):
             cell.font = header_font
             cell.alignment = Alignment(horizontal="center", wrap_text=True)
 
-    # --- Лист 1: Регионы (субъекты РФ) ---
+    def fill_table(ws, headers, rows, widths, num_cols=(), pct_cols=()):
+        ws.append(headers)
+        style_header(ws, 1, len(headers))
+        for r in rows:
+            ws.append(r)
+        for i, w in enumerate(widths):
+            ws.column_dimensions[get_column_letter(i + 1)].width = w
+        for row in ws.iter_rows(min_row=2, max_row=1 + len(rows)):
+            for cell in row:
+                if cell.column in num_cols:
+                    cell.number_format = NUM
+                elif cell.column in pct_cols:
+                    cell.number_format = PCT
+        ws.freeze_panes = "A2"
+
+    kpi = p.get("kpi") or {}
+    dyn = p.get("dynamics") or {}
+    labels = dyn.get("labels") or []
+    market = dyn.get("market") or []
+    otp = dyn.get("otp") or []
+
+    # --- Лист 1: Сводка (KPI + ключевые выводы) ---
     ws = wb.active
-    ws.title = "Регионы РФ"
-    headers = ["Регион (субъект РФ)", "Показов (рынок)", "Показов (ОТП)",
-               "Доля ОТП от рынка, %", "Доля рынка, %",
-               "Индекс соответствия"] + month_labels
-    ws.append(headers)
-    style_header(ws, 1, len(headers))
-    for r in regions:
-        rid = str(r.get("id"))
-        monthly = matrix.get(rid, [None] * len(month_keys))
-        row = [r.get("name"), r.get("market"), r.get("otp"),
-               r.get("penetration"), r.get("marketShare"),
-               r.get("affinityIndex")]
-        row.extend(monthly)
-        ws.append(row)
+    ws.title = "Сводка"
+    ws["A1"] = "Аналитика Wordstat · рынок и бренд ОТП"
+    ws["A1"].font = title_font
+    ws["A2"] = "Фраза (рынок): %s" % (p.get("phrase") or "")
+    ws["A3"] = "Фраза (бренд): %s" % (p.get("otpPhrase") or "")
+    ws["A4"] = "Сформировано: %s" % _dt.datetime.now().strftime("%d.%m.%Y %H:%M")
+    row = 6
+    pairs = [
+        ("Период анализа", kpi.get("periodLabel")),
+        ("Объём спроса · рынок", kpi.get("market")),
+        ("Объём спроса · ОТП", kpi.get("otp")),
+        ("Доля ОТП в спросе", (kpi.get("share") or 0) / 100.0),
+        ("Динамика · рынок", kpi.get("growthMarket")),
+        ("Динамика · ОТП", kpi.get("growthOtp")),
+        ("Пик спроса · рынок", kpi.get("peakMarket")),
+        ("Пик спроса · ОТП", kpi.get("peakOtp")),
+        ("Лидер · рынок", kpi.get("leader")),
+        ("Лидер · ОТП", kpi.get("leaderOtp")),
+        ("CAGR · рынок", kpi.get("cagrMarket")),
+        ("CAGR · ОТП", kpi.get("cagrOtp")),
+        ("Концентрация топ-5 · рынок", kpi.get("concMarket")),
+        ("Концентрация топ-5 · ОТП", kpi.get("concOtp")),
+        ("Индекс HHI · рынок", kpi.get("hhi")),
+        ("Широта спроса", kpi.get("breadth")),
+    ]
+    for name, value in pairs:
+        ws.cell(row=row, column=1, value=name).font = label_font
+        cell = ws.cell(row=row, column=2, value=value)
+        if name.startswith("Объём"):
+            cell.number_format = NUM
+        if name.startswith("Доля"):
+            cell.number_format = PCT
+        row += 1
+    row += 1
+    ws.cell(row=row, column=1, value="Ключевые выводы").font = title_font
+    row += 1
+    for text in p.get("insights") or []:
+        ws.cell(row=row, column=1, value="• " + str(text))
+        row += 1
+    ws.column_dimensions["A"].width = 34
+    ws.column_dimensions["B"].width = 28
 
-    ws.column_dimensions["A"].width = 38
-    for col, w in (("B", 16), ("C", 15), ("D", 18), ("E", 14), ("F", 18)):
-        ws.column_dimensions[col].width = w
-    for i in range(len(month_labels)):
-        ws.column_dimensions[get_column_letter(7 + i)].width = 11
-    ws.freeze_panes = "B2"
-
-    # Диаграмма топ-15 регионов: рынок vs ОТП (col B, C).
-    if regions:
-        n = min(len(regions), 15)
-        chart = BarChart()
-        chart.title = "Топ-15 регионов: рынок и ОТП"
-        chart.type = "bar"
-        chart.height = 12
-        chart.width = 22
-        data = Reference(ws, min_col=2, max_col=3, min_row=1, max_row=1 + n)
-        cats = Reference(ws, min_col=1, min_row=2, max_row=1 + n)
-        chart.add_data(data, titles_from_data=True)
-        chart.set_categories(cats)
-        anchor = get_column_letter(len(headers) + 2) + "2"
-        ws.add_chart(chart, anchor)
-
-    # --- Лист 2: Динамика (рынок + ОТП) ---
-    labels = (dynamics or {}).get("labels") or []
-    market = (dynamics or {}).get("market") or []
-    otp = (dynamics or {}).get("otp") or []
-    ws2 = wb.create_sheet("Динамика")
-    ws2.append(["Период", "Показов (рынок)", "Показов (ОТП)"])
-    style_header(ws2, 1, 3)
-    for i, lab in enumerate(labels):
-        ws2.append([lab,
-                    market[i] if i < len(market) else None,
-                    otp[i] if i < len(otp) else None])
-    ws2.column_dimensions["A"].width = 16
-    ws2.column_dimensions["B"].width = 16
-    ws2.column_dimensions["C"].width = 16
+    # --- Лист 2: Динамика (рынок, ОТП, доля) ---
     if labels:
+        ws2 = wb.create_sheet("Динамика")
+        rows = []
+        for i, lab in enumerate(labels):
+            m = market[i] if i < len(market) else None
+            o = otp[i] if i < len(otp) else None
+            share = (o / m) if (m and o is not None) else None
+            rows.append([lab, m, o, share])
+        fill_table(ws2, ["Период", "Рынок, показов", "ОТП, показов", "Доля ОТП"],
+                   rows, [16, 16, 15, 12], num_cols=(2, 3), pct_cols=(4,))
         line = LineChart()
-        line.title = "Динамика показов: рынок и ОТП"
-        line.height = 10
-        line.width = 24
-        data = Reference(ws2, min_col=2, max_col=3, min_row=1, max_row=1 + len(labels))
-        cats = Reference(ws2, min_col=1, min_row=2, max_row=1 + len(labels))
+        line.title = "Динамика спроса: рынок и ОТП"
+        line.height, line.width = 10, 26
+        data = Reference(ws2, min_col=2, max_col=3, min_row=1, max_row=1 + len(rows))
+        cats = Reference(ws2, min_col=1, min_row=2, max_row=1 + len(rows))
         line.add_data(data, titles_from_data=True)
         line.set_categories(cats)
-        ws2.add_chart(line, "E2")
+        ws2.add_chart(line, "F2")
+
+    # --- Лист 3: Регионы ---
+    regions = p.get("regions") or []
+    if regions:
+        ws3 = wb.create_sheet("Регионы")
+        rows = [[r.get("name"), r.get("market"), r.get("otp"),
+                 (r.get("penetration") or 0) / 100.0,
+                 (r.get("marketShare") or 0) / 100.0,
+                 r.get("affinityIndex")] for r in regions]
+        fill_table(ws3, ["Регион (субъект РФ)", "Рынок, показов", "ОТП, показов",
+                         "Доля ОТП от рынка", "Доля региона в рынке", "Индекс соответствия"],
+                   rows, [38, 16, 15, 17, 19, 18], num_cols=(2, 3), pct_cols=(4, 5))
+        n = min(len(regions), 15)
+        chart = BarChart()
+        chart.type = "bar"
+        chart.title = "Топ-15 регионов: рынок и ОТП"
+        chart.height, chart.width = 12, 24
+        data = Reference(ws3, min_col=2, max_col=3, min_row=1, max_row=1 + n)
+        cats = Reference(ws3, min_col=1, min_row=2, max_row=1 + n)
+        chart.add_data(data, titles_from_data=True)
+        chart.set_categories(cats)
+        ws3.add_chart(chart, "H2")
+
+    # --- Лист 4: Конкуренты ---
+    comp = p.get("competitors") or []
+    if comp and labels:
+        ws4 = wb.create_sheet("Конкуренты")
+        headers = ["Период"] + [c.get("brand") for c in comp]
+        rows = []
+        for i, lab in enumerate(labels):
+            rows.append([lab] + [(c.get("series") or [None])[i]
+                                 if i < len(c.get("series") or []) else None
+                                 for c in comp])
+        fill_table(ws4, headers, rows, [16] + [14] * len(comp),
+                   num_cols=tuple(range(2, len(comp) + 2)))
+        line = LineChart()
+        line.title = "Брендовый спрос: ОТП и конкуренты"
+        line.height, line.width = 10, 26
+        data = Reference(ws4, min_col=2, max_col=1 + len(comp),
+                         min_row=1, max_row=1 + len(rows))
+        cats = Reference(ws4, min_col=1, min_row=2, max_row=1 + len(rows))
+        line.add_data(data, titles_from_data=True)
+        line.set_categories(cats)
+        ws4.add_chart(line, get_column_letter(len(comp) + 3) + "2")
+
+    # --- Лист 5: Прогноз доли ОТП ---
+    fc = p.get("forecast") or {}
+    if fc.get("labels"):
+        ws5 = wb.create_sheet("Прогноз")
+        rows = []
+        for i, lab in enumerate(fc["labels"]):
+            def val(key):
+                arr = fc.get(key) or []
+                v = arr[i] if i < len(arr) else None
+                return (v / 100.0) if v is not None else None
+            rows.append([lab, val("actual"), val("base"), val("opt"), val("pess")])
+        fill_table(ws5, ["Период", "Факт", "Базовый", "Оптимистичный", "Пессимистичный"],
+                   rows, [16, 12, 12, 15, 17], pct_cols=(2, 3, 4, 5))
+        line = LineChart()
+        line.title = "Прогноз доли ОТП (3 сценария)"
+        line.height, line.width = 10, 26
+        data = Reference(ws5, min_col=2, max_col=5, min_row=1, max_row=1 + len(rows))
+        cats = Reference(ws5, min_col=1, min_row=2, max_row=1 + len(rows))
+        line.add_data(data, titles_from_data=True)
+        line.set_categories(cats)
+        ws5.add_chart(line, "H2")
+
+    # --- Лист 6: Сезонность (матрицы год × месяц) ---
+    sea = p.get("seasonality") or {}
+    if sea.get("years"):
+        ws6 = wb.create_sheet("Сезонность")
+        months = sea.get("months") or []
+        for block, key in (("Рынок: запросы по месяцам", "market"),
+                           ("ОТП: запросы по месяцам", "otp")):
+            ws6.append([block])
+            ws6.cell(row=ws6.max_row, column=1).font = title_font
+            ws6.append(["Год"] + months)
+            style_header(ws6, ws6.max_row, len(months) + 1)
+            for yi, year in enumerate(sea["years"]):
+                vals = (sea.get(key) or [[]])[yi] if yi < len(sea.get(key) or []) else []
+                ws6.append([year] + [vals[i] if i < len(vals) else None
+                                     for i in range(len(months))])
+                for cell in ws6[ws6.max_row][1:]:
+                    cell.number_format = NUM
+            ws6.append([])
+        ws6.column_dimensions["A"].width = 10
+        for i in range(len(months)):
+            ws6.column_dimensions[get_column_letter(i + 2)].width = 11
 
     buffer = io.BytesIO()
     wb.save(buffer)

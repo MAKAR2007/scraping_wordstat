@@ -11,6 +11,7 @@ let state = {
 let charts = {};
 let topLimit = 15;
 let excluded = new Set();   // id субъектов, исключённых из части графиков
+let heatmapMetric = "market";
 
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => Math.round(n || 0).toLocaleString("ru-RU");
@@ -69,12 +70,20 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("device").addEventListener("change", () => { if (state.marketPhrase) $("searchForm").requestSubmit(); });
   $("period").addEventListener("change", () => { if (state.marketPhrase) onPeriodChange(); });
-  document.querySelectorAll(".toggle-btn").forEach((b) => {
+  document.querySelectorAll(".toggle-btn[data-top]").forEach((b) => {
     b.addEventListener("click", () => {
-      document.querySelectorAll(".toggle-btn").forEach((x) => x.classList.remove("active"));
+      document.querySelectorAll(".toggle-btn[data-top]").forEach((x) => x.classList.remove("active"));
       b.classList.add("active");
       topLimit = parseInt(b.dataset.top, 10);
       renderRegionsChart();
+    });
+  });
+  document.querySelectorAll("#heatmapToggle .toggle-btn").forEach((b) => {
+    b.addEventListener("click", () => {
+      document.querySelectorAll("#heatmapToggle .toggle-btn").forEach((x) => x.classList.remove("active"));
+      b.classList.add("active");
+      heatmapMetric = b.dataset.metric;
+      renderHeatmap();
     });
   });
 });
@@ -154,9 +163,11 @@ function renderAll() {
   renderKpi();
   renderLeaders();
   renderStrategicKpis();
+  renderInsights();
   renderPeriodViews();
   renderSeasonalityChart("market", "seasonalityChart", "seasonality");
   renderSeasonalityChart("otp", "seasonalityOtpChart", "seasonalityOtp");
+  renderHeatmap();
 }
 
 function onPeriodChange() {
@@ -164,6 +175,7 @@ function onPeriodChange() {
   renderKpi();
   renderLeaders();
   renderStrategicKpis();
+  renderInsights();
   renderPeriodViews();
 }
 
@@ -431,6 +443,10 @@ function renderRegionsChart() {
 
 function renderDynamicsChart() {
   const agg = aggregate(currentDynHist(), periodKey());
+  // Оранжевые маркеры — аномальные изменения спроса (|z| ≥ 2 по м/м темпам).
+  const anomalySet = new Set(detectAnomalies(agg.market).map((a) => a.i));
+  const pr = agg.market.map((_, i) => (anomalySet.has(i) ? 4.5 : 0));
+  const pbg = agg.market.map((_, i) => (anomalySet.has(i) ? C.orange : C.market));
   destroy("dynamics");
   charts.dynamics = new Chart($("dynamicsChart"), {
     type: "line",
@@ -438,7 +454,8 @@ function renderDynamicsChart() {
       labels: agg.labels,
       datasets: [
         { label: "ОТП", data: agg.otp, yAxisID: "yOtp", borderColor: C.otp, backgroundColor: C.otpSoft, fill: true, tension: .35, pointRadius: 0, borderWidth: 2.5 },
-        { label: "Рынок", data: agg.market, yAxisID: "yMarket", borderColor: C.market, backgroundColor: C.marketSoft, fill: false, tension: .35, pointRadius: 0, borderWidth: 2.5 },
+        { label: "Рынок", data: agg.market, yAxisID: "yMarket", borderColor: C.market, backgroundColor: C.marketSoft, fill: false, tension: .35,
+          pointRadius: pr, pointBackgroundColor: pbg, pointBorderColor: pbg, borderWidth: 2.5 },
       ],
     },
     options: {
@@ -447,7 +464,13 @@ function renderDynamicsChart() {
         legend: { display: true, position: "top", labels: { boxWidth: 12, font: { weight: 700 } } },
         tooltip: { callbacks: {
           label: (c) => " " + c.dataset.label + ": " + fmt(c.parsed.y),
-          afterBody: (items) => { const i = items[0].dataIndex; const m = agg.market[i], o = agg.otp[i]; return m ? "доля ОТП: " + (o / m * 100).toFixed(2).replace(".", ",") + "%" : ""; },
+          afterBody: (items) => {
+            const i = items[0].dataIndex;
+            const m = agg.market[i], o = agg.otp[i];
+            const lines = m ? ["доля ОТП: " + (o / m * 100).toFixed(2).replace(".", ",") + "%"] : [];
+            if (anomalySet.has(i)) lines.push("⚠ аномальное изменение спроса");
+            return lines;
+          },
         } },
       },
       scales: {
@@ -530,7 +553,7 @@ function holtDamped(y, h, alpha = 0.45, beta = 0.22, phi = 0.9) {
   return { fc, sigma };
 }
 
-function renderForecastChart() {
+function computeForecastData() {
   const h = state.hist;
   const share = h.market.map((m, i) => (m ? h.otp[i] / m * 100 : 0));
   const n = share.length, lastK = Math.min(24, n), start = n - lastK;
@@ -549,6 +572,11 @@ function renderForecastChart() {
     opt.push(Math.max(0, fc[k - 1] + spread));
     pess.push(Math.max(0, fc[k - 1] - spread));
   }
+  return { labels, actual, base, opt, pess };
+}
+
+function renderForecastChart() {
+  const { labels, actual, base, opt, pess } = computeForecastData();
   destroy("forecast");
   charts.forecast = new Chart($("forecastChart"), {
     type: "line",
@@ -814,10 +842,33 @@ function renderExcludeChips() {
 async function onExport() {
   const btn = $("exportBtn");
   btn.disabled = true; const label = btn.textContent; btn.textContent = "…";
+  // Снимок всего дашборда: KPI, выводы, динамика, регионы, конкуренты,
+  // прогноз и сезонность — бэкенд соберёт книгу из 6 листов.
+  const b = currentBucket();
+  const txt = (id) => $(id).textContent.trim();
+  const kpi = {
+    periodLabel: b.label, market: b.M, otp: b.O, share: b.M ? b.O / b.M * 100 : 0,
+    growthMarket: txt("growthMarket") + " (" + txt("growthMarketFoot") + ")",
+    growthOtp: txt("growthOtp") + " (" + txt("growthOtpFoot") + ")",
+    peakMarket: txt("peakMarket") + " — " + txt("peakMarketFoot"),
+    peakOtp: txt("peakOtp") + " — " + txt("peakOtpFoot"),
+    leader: txt("statLeader"), leaderOtp: txt("statLeaderOtp"),
+    cagrMarket: txt("cagrMarket"), cagrOtp: txt("cagrOtp"),
+    concMarket: txt("kpiConcMarket"), concOtp: txt("kpiConcOtp"),
+    hhi: txt("kpiHhi"), breadth: txt("kpiBreadth"),
+  };
+  const sm = seasonalityMatrix("market"), so = seasonalityMatrix("otp");
   try {
     const resp = await fetch("/api/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phrase: state.marketPhrase, otpPhrase: state.otpPhrase, regions: state.regions, dynamics: state.hist }),
+      body: JSON.stringify({
+        phrase: state.marketPhrase, otpPhrase: state.otpPhrase,
+        kpi, insights: state.lastInsights || [],
+        dynamics: state.hist, regions: state.regions,
+        competitors: (state.competitors || []).map((c) => ({ brand: c.brand, series: c.series })),
+        forecast: computeForecastData(),
+        seasonality: { years: sm.years, months: MONTH_ABBR, market: sm.matrix, otp: so.matrix },
+      }),
     });
     if (!resp.ok) throw new Error("Не удалось сформировать файл");
     const blob = await resp.blob(), url = URL.createObjectURL(blob);
@@ -826,6 +877,146 @@ async function onExport() {
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   } catch (err) { showError(err.message); }
   finally { btn.disabled = false; btn.textContent = label; }
+}
+
+// -------------------------------------------- аномалии и ключевые выводы --
+function detectAnomalies(values) {
+  // |z| ≥ 2 по темпам м/м (и сам скачок ≥ 20%) — отсев сезонного шума.
+  if (!values || values.length < 10) return [];
+  const pct = [];
+  for (let i = 1; i < values.length; i++) {
+    const p = values[i - 1];
+    pct.push(p ? (values[i] - p) / p * 100 : 0);
+  }
+  const mean = pct.reduce((a, b) => a + b, 0) / pct.length;
+  const sd = Math.sqrt(pct.reduce((a, b) => a + (b - mean) * (b - mean), 0) / pct.length) || 1;
+  const out = [];
+  pct.forEach((v, j) => {
+    if (Math.abs((v - mean) / sd) >= 2 && Math.abs(v) >= 20) out.push({ i: j + 1, pct: v });
+  });
+  return out;
+}
+
+function buildInsights() {
+  const out = [];
+  const pp = (v, d = 2) => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(d).replace(".", ",") + " п.п.";
+  const ya = aggregate(state.hist, "year");
+  const full = [];
+  for (let i = 0; i < ya.counts.length; i++) if (ya.counts[i] >= 12) full.push(i);
+
+  if (full.length >= 2) {
+    const i2 = full[full.length - 1], i1 = full[full.length - 2];
+    const gm = (ya.market[i2] - ya.market[i1]) / (ya.market[i1] || 1) * 100;
+    const go = (ya.otp[i2] - ya.otp[i1]) / (ya.otp[i1] || 1) * 100;
+    out.push({ tone: gm >= 0 ? "up" : "down",
+      text: "Рынок за " + ya.labels[i2] + ": " + fmt(ya.market[i2]) + " запросов, " + signPct(gm) + " к " + ya.labels[i1] + "." });
+    out.push({ tone: go >= 0 ? "up" : "down",
+      text: "Бренд ОТП: " + fmt(ya.otp[i2]) + " запросов, " + signPct(go) + " г/г — " + (go > gm ? "растёт быстрее рынка." : "отстаёт от рынка.") });
+    const s2 = ya.market[i2] ? ya.otp[i2] / ya.market[i2] * 100 : 0;
+    const s1 = ya.market[i1] ? ya.otp[i1] / ya.market[i1] * 100 : 0;
+    out.push({ tone: s2 - s1 >= 0 ? "up" : "down",
+      text: "Доля ОТП в спросе: " + s2.toFixed(3).replace(".", ",") + "% (" + pp(s2 - s1) + " за год)." });
+  }
+
+  const sm = [...state.regions].sort((a, b) => b.market - a.market);
+  const tot = sm.reduce((a, r) => a + r.market, 0) || 1;
+  const top5 = sm.slice(0, 5).reduce((a, r) => a + r.market, 0);
+  out.push({ tone: "info",
+    text: "Топ-5 регионов дают " + (top5 / tot * 100).toFixed(1).replace(".", ",") + "% спроса; лидер — " + (sm[0] ? sm[0].name : "—") + "." });
+
+  const totO = state.regions.reduce((a, r) => a + r.otp, 0);
+  const avgPen = tot ? totO / tot * 100 : 0;
+  const opp = sm.slice(0, 15).filter((r) => r.penetration < avgPen).slice(0, 3).map((r) => r.name);
+  if (opp.length) out.push({ tone: "warn",
+    text: "Приоритет роста: " + opp.join(", ") + " — крупный спрос при доле ОТП ниже средней (" + avgPen.toFixed(2).replace(".", ",") + "%)." });
+
+  if ((state.competitors || []).length > 1) {
+    const b = currentBucket();
+    const vals = state.competitors.map((c) => aggSeries(c.series, periodKey()).values[b.li] || 0);
+    const total = vals.reduce((a, v) => a + v, 0) || 1;
+    const otpI = state.competitors.findIndex((c) => c.isOtp);
+    const leadI = vals.indexOf(Math.max(...vals));
+    out.push({ tone: "warn",
+      text: "Доля голоса ОТП по брендовой фразе — " + (vals[otpI] / total * 100).toFixed(1).replace(".", ",") + "%; лидер фразы — " + state.competitors[leadI].brand + "." });
+  }
+
+  const f = computeForecastData();
+  const lastA = [...f.actual].reverse().find((v) => v != null);
+  const lastB = f.base[f.base.length - 1];
+  if (lastA != null && lastB != null) {
+    out.push({ tone: lastB - lastA >= 0 ? "up" : "down",
+      text: "Прогноз (базовый): доля ОТП через 6 мес ≈ " + lastB.toFixed(2).replace(".", ",") + "% (" + pp(lastB - lastA) + ")." });
+  }
+
+  const recent = detectAnomalies(state.hist.market).filter((a) => a.i >= state.hist.market.length - 12);
+  if (recent.length) {
+    const a = recent[recent.length - 1];
+    out.push({ tone: "warn",
+      text: "Аномалия спроса: " + state.hist.labels[a.i] + " (" + signPct(a.pct, 0) + " м/м) — проверьте сезонность и кампании." });
+  }
+  return out;
+}
+
+function renderInsights() {
+  const list = buildInsights();
+  state.lastInsights = list.map((x) => x.text);
+  const grid = $("insightsGrid");
+  grid.innerHTML = "";
+  list.forEach((x) => {
+    const div = document.createElement("div");
+    div.className = "insight insight--" + x.tone;
+    const mark = x.tone === "up" ? "▲" : x.tone === "down" ? "▼" : x.tone === "warn" ? "!" : "i";
+    div.innerHTML = '<span class="insight-mark">' + mark + "</span><span>" + x.text + "</span>";
+    grid.appendChild(div);
+  });
+}
+
+// ------------------------------------------------- тепловая карта спроса --
+function seasonalityMatrix(metric) {
+  const h = state.hist, years = {};
+  h.keys.forEach((k, i) => {
+    const y = k.slice(0, 4), m = parseInt(k.slice(5, 7), 10) - 1;
+    (years[y] = years[y] || new Array(12).fill(null))[m] = h[metric][i];
+  });
+  const ys = Object.keys(years).sort();
+  return { years: ys, matrix: ys.map((y) => years[y]) };
+}
+
+function renderHeatmap() {
+  const { years, matrix } = seasonalityMatrix(heatmapMetric);
+  const max = Math.max(...matrix.flat().filter((v) => v != null), 1);
+  const box = $("heatmap");
+  box.innerHTML = "";
+  const grid = document.createElement("div");
+  grid.className = "hm-grid";
+  grid.appendChild(hmCell("", "hm-head"));
+  MONTH_ABBR.forEach((m) => grid.appendChild(hmCell(m, "hm-head")));
+  const rgb = heatmapMetric === "otp" ? "108,76,241" : "82,174,48";
+  years.forEach((y, yi) => {
+    grid.appendChild(hmCell(y, "hm-year"));
+    matrix[yi].forEach((v, mi) => {
+      const c = document.createElement("div");
+      c.className = "hm-cell";
+      if (v == null) {
+        c.classList.add("hm-empty");
+      } else {
+        const t = v / max;
+        c.style.background = "rgba(" + rgb + "," + (0.07 + 0.88 * t).toFixed(3) + ")";
+        if (t > 0.55) c.style.color = "#fff";
+        c.textContent = shortNum(v);
+        c.title = MONTH_ABBR[mi] + " " + y + ": " + fmt(v) + " запросов";
+      }
+      grid.appendChild(c);
+    });
+  });
+  box.appendChild(grid);
+}
+
+function hmCell(text, cls) {
+  const d = document.createElement("div");
+  d.className = cls;
+  d.textContent = text;
+  return d;
 }
 
 // --------------------------------------------------------------- helpers --
