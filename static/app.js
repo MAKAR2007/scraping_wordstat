@@ -1033,22 +1033,26 @@ function intentSplit() {
   });
 }
 
-// Качество тренда: удержание спроса через 2 мес после пиков (+ длина тренда).
-function trendQuality(values) {
-  const peaks = [];
-  for (let i = 2; i < values.length - 2; i++) {
-    if (values[i] > values[i - 1] * 1.18 && values[i] > values[i + 1]) peaks.push(i);
-  }
-  const rets = peaks
-    .map((i) => (values[i] ? values[Math.min(i + 2, values.length - 1)] / values[i] * 100 : null))
-    .filter((v) => v != null);
-  const retention = rets.length ? rets.reduce((a, b) => a + b, 0) / rets.length : null;
-  let run = 1;
-  for (let i = values.length - 1; i > 1; i--) {
-    if (Math.sign(values[i] - values[i - 1]) === Math.sign(values[i - 1] - values[i - 2])) run++;
-    else break;
-  }
-  return { retention, peaks: peaks.length, run };
+// Индекс сезонности: во сколько раз пиковый календарный месяц выше среднего.
+// Считается напрямую из ряда Wordstat (усреднение по месяцам всех лет) —
+// результат однозначен и не зависит от моделей.
+function seasonalityIndex(values, keys) {
+  if (!values || values.length < 12) return null;
+  const sum = new Array(12).fill(0), cnt = new Array(12).fill(0);
+  keys.forEach((k, i) => {
+    if (values[i] != null) { const m = +k.slice(5, 7) - 1; sum[m] += values[i]; cnt[m]++; }
+  });
+  const avg = sum.map((s, m) => (cnt[m] ? s / cnt[m] : null));
+  const present = avg.filter((v) => v != null);
+  if (present.length < 6) return null;
+  const mean = present.reduce((a, b) => a + b, 0) / present.length;
+  let peak = -1, peakM = 0, low = Infinity, lowM = 0;
+  avg.forEach((v, m) => {
+    if (v == null) return;
+    if (v > peak) { peak = v; peakM = m; }
+    if (v < low) { low = v; lowM = m; }
+  });
+  return mean ? { index: peak / mean, peak: MONTH_ABBR[peakM], low: MONTH_ABBR[lowM] } : null;
 }
 
 function renderQualityKpis() {
@@ -1063,11 +1067,11 @@ function renderQualityKpis() {
   $("kpiService").textContent = pct(sv);
   $("kpiChurn").textContent = pct(tx);
 
-  const tq = trendQuality(state.hist.market);
-  $("kpiTqi").textContent = tq.retention == null ? "—" : Math.round(tq.retention) + "%";
-  $("kpiTqiFoot").textContent = tq.run < 3
-    ? "Сколько спроса остаётся через 2 месяца после рекламного всплеска. Текущий рост идёт " + tq.run + " мес — закрепится не факт."
-    : "Сколько спроса остаётся через 2 месяца после рекламного всплеска. Выше — спрос закрепляется, а не гаснет.";
+  const si = seasonalityIndex(state.hist.otp, state.hist.keys);
+  $("kpiSeason").textContent = si ? si.index.toFixed(2).replace(".", ",") + "×" : "—";
+  $("kpiSeasonFoot").textContent = si
+    ? "Пиковый месяц («" + si.peak + "») выше среднемесячного спроса ОТП в " + si.index.toFixed(2).replace(".", ",") + " раза. Минимум — «" + si.low + "». Выше индекс — спрос сезоннее."
+    : "Во сколько раз пиковый месяц выше среднемесячного спроса ОТП.";
 }
 
 function renderIntentChart() {
