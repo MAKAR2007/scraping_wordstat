@@ -197,7 +197,6 @@ function renderPeriodViews() {
   renderOpportunityChart();
   renderShareChart("shareOtp", "otp");
   renderShareChart("shareMarket", "market");
-  renderCompetition();
   renderRegionsTable();
 }
 
@@ -614,62 +613,6 @@ function renderForecastChart() {
   });
 }
 
-// ----------------------------------------------- конкурентный анализ ------
-function aggSeries(series, period) {
-  const a = aggregate({ keys: state.hist.keys, labels: state.hist.labels, market: series, otp: series }, period);
-  return { labels: a.labels, values: a.market };
-}
-
-function renderCompetition() {
-  const comp = state.competitors || [];
-  const sect = $("competitionSection"), eyebrow = $("competitionEyebrow");
-  if (comp.length < 2) { sect.classList.add("hidden"); eyebrow.classList.add("hidden"); return; }
-  sect.classList.remove("hidden"); eyebrow.classList.remove("hidden");
-  const period = periodKey(), b = currentBucket();
-  const labels = aggSeries(comp[0].series, period).labels;
-
-  destroy("compDyn");
-  charts.compDyn = new Chart($("compDynChart"), {
-    type: "line",
-    data: {
-      labels,
-      datasets: comp.map((c) => ({
-        label: c.brand, data: aggSeries(c.series, period).values,
-        borderColor: brandColor(c.brand), backgroundColor: "transparent",
-        borderWidth: c.isOtp ? 3.2 : 2, tension: .35, pointRadius: 0,
-      })),
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
-      plugins: { legend: { display: true, position: "top", labels: { boxWidth: 12, font: { weight: 700 } } },
-        tooltip: { callbacks: { label: (c) => " " + c.dataset.label + ": " + fmt(c.parsed.y) } } },
-      scales: { x: { ticks: { maxRotation: 50, minRotation: 45, autoSkip: true, font: { size: 10 } } }, y: { ticks: { callback: shortNum } } },
-    },
-  });
-
-  const vals = comp.map((c) => aggSeries(c.series, period).values[b.li] || 0);
-  const total = vals.reduce((a, v) => a + v, 0) || 1;
-  destroy("compShare");
-  charts.compShare = new Chart($("compShareChart"), {
-    type: "doughnut",
-    data: { labels: comp.map((c) => c.brand), datasets: [{ data: vals, backgroundColor: comp.map((c) => brandColor(c.brand)), borderColor: "#fff", borderWidth: 2 }] },
-    options: {
-      responsive: true, maintainAspectRatio: false, cutout: "60%",
-      plugins: {
-        legend: { position: "right", labels: { font: { size: 11 }, boxWidth: 12, padding: 7 } },
-        tooltip: { callbacks: { label: (c) => " " + c.label + ": " + fmt(c.parsed) + " (" + (c.parsed / total * 100).toFixed(1) + "%)" } },
-      },
-    },
-  });
-
-  const otpI = comp.findIndex((c) => c.isOtp);
-  const leadI = vals.indexOf(Math.max(...vals));
-  $("competitionNote").textContent =
-    "Доля голоса ОТП по этой фразе: " + (vals[otpI] / total * 100).toFixed(1).replace(".", ",") +
-    "% (за " + b.label + "). Лидер по фразе «кредитная карта + банк» — " + comp[leadI].brand +
-    " (это не общий рейтинг бренда).";
-}
-
 function renderDistChart() {
   const { labels, data } = buildHistogram(visibleRegions().map((r) => r.market));
   destroy("dist");
@@ -890,7 +833,9 @@ async function onExport() {
         phrase: state.marketPhrase, otpPhrase: state.otpPhrase,
         kpi,
         dynamics: state.hist, regions: state.regions,
-        competitors: (state.competitors || []).map((c) => ({ brand: c.brand, series: c.series })),
+        // Брендовый спрос банков (как в SoS-блоке): ОТП — реальный ряд,
+        // конкуренты — оценка; ряды выровнены по месяцам dynamics.
+        competitors: (brandSeries() || []).map((r) => ({ brand: r.brand, series: r.series })),
         forecast: computeForecastData(),
         seasonality: { years: sm.years, months: MONTH_ABBR, market: sm.matrix, otp: so.matrix },
       }),
@@ -1190,16 +1135,39 @@ function seasonalityMatrix(metric) {
   return { years: ys, matrix: ys.map((y) => years[y]) };
 }
 
+// Термальная палитра: голубой (минимум) → зелёный → жёлтый → оранжевый →
+// красный (максимум). Шкала нормируется от минимума к максимуму ряда, чтобы
+// различия месяцев были видны, а не тонули в полупрозрачности одного цвета.
+const HEAT_STOPS = [
+  [0.00, [217, 237, 255]],
+  [0.25, [144, 210, 160]],
+  [0.50, [255, 221, 87]],
+  [0.75, [255, 142, 46]],
+  [1.00, [206, 32, 41]],
+];
+
+function heatColor(t) {
+  t = Math.max(0, Math.min(1, t));
+  for (let i = 1; i < HEAT_STOPS.length; i++) {
+    if (t <= HEAT_STOPS[i][0]) {
+      const [t0, c0] = HEAT_STOPS[i - 1], [t1, c1] = HEAT_STOPS[i];
+      const k = (t - t0) / (t1 - t0 || 1);
+      return "rgb(" + c0.map((v, j) => Math.round(v + (c1[j] - v) * k)).join(",") + ")";
+    }
+  }
+  return "rgb(206,32,41)";
+}
+
 function renderHeatmap() {
   const { years, matrix } = seasonalityMatrix(heatmapMetric);
-  const max = Math.max(...matrix.flat().filter((v) => v != null), 1);
+  const flat = matrix.flat().filter((v) => v != null);
+  const max = Math.max(...flat, 1), min = Math.min(...flat, max);
   const box = $("heatmap");
   box.innerHTML = "";
   const grid = document.createElement("div");
   grid.className = "hm-grid";
   grid.appendChild(hmCell("", "hm-head"));
   MONTH_ABBR.forEach((m) => grid.appendChild(hmCell(m, "hm-head")));
-  const rgb = heatmapMetric === "otp" ? "108,76,241" : "82,174,48";
   years.forEach((y, yi) => {
     grid.appendChild(hmCell(y, "hm-year"));
     matrix[yi].forEach((v, mi) => {
@@ -1208,9 +1176,9 @@ function renderHeatmap() {
       if (v == null) {
         c.classList.add("hm-empty");
       } else {
-        const t = v / max;
-        c.style.background = "rgba(" + rgb + "," + (0.07 + 0.88 * t).toFixed(3) + ")";
-        if (t > 0.55) c.style.color = "#fff";
+        const t = (v - min) / (max - min || 1);
+        c.style.background = heatColor(t);
+        if (t > 0.62) c.style.color = "#fff";
         c.textContent = shortNum(v);
         c.title = MONTH_ABBR[mi] + " " + y + ": " + fmt(v) + " запросов";
       }

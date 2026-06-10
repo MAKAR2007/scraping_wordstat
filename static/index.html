@@ -199,21 +199,6 @@
         <div class="chart-box chart-box--tall"><canvas id="opportunityChart"></canvas></div>
       </section>
 
-      <p class="section-eyebrow hidden" id="competitionEyebrow">Конкуренция по запросу «кредитная карта &lt;банк&gt;»</p>
-      <div class="grid-2 hidden" id="competitionSection">
-        <section class="panel">
-          <h2>Динамика запросов «кредитная карта &lt;банк&gt;»</h2>
-          <p class="chart-note">Спрос по конкретной фразе «кредитная карта + банк», а не общий рейтинг бренда.
-            Сбер чаще ищут как «СберКарта»/«Сбербанк», поэтому по этой узкой фразе он ниже Альфы и Т‑Банка.</p>
-          <div class="chart-box"><canvas id="compDynChart"></canvas></div>
-        </section>
-        <section class="panel">
-          <h2>Доля голоса по этому запросу</h2>
-          <p class="chart-note" id="competitionNote">Сравнение объёма запросов «кредитная карта + банк» за выбранный период</p>
-          <div class="chart-box"><canvas id="compShareChart"></canvas></div>
-        </section>
-      </div>
-
       <!-- Бренды банков: Share of Search -->
       <p class="section-eyebrow hidden" id="brandEyebrow">Бренды банков · доля голоса (Share of Search)</p>
       <div class="hidden" id="brandSection">
@@ -316,7 +301,7 @@
         <div class="panel-head">
           <div>
             <h2>Тепловая карта спроса · год × месяц</h2>
-            <p class="chart-note">Чем насыщеннее ячейка, тем выше спрос в этом месяце. Сразу видно сезонные пики и провалы.</p>
+            <p class="chart-note">Холодные цвета (голубой) — минимальный спрос, тёплые (оранжевый, красный) — максимальный. Пики и провалы видны мгновенно.</p>
           </div>
           <div class="toggle" id="heatmapToggle">
             <button class="toggle-btn active" data-metric="market">Рынок</button>
