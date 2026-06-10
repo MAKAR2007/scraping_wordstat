@@ -120,6 +120,8 @@ def search():
         "year": year,
         "subjects": subjects,
         "competitors": competitors,
+        # Реальный брендовый спрос «ОТП Банк» (для SoS-аналитики банков).
+        "brandOtp": dataset.otp_brand_series() if client.demo_mode else [],
         "dynamics": hist,            # полная месячная история {keys,labels,market,otp}
         "excluded": {
             "federalDistricts": len(index["federal_districts"]),

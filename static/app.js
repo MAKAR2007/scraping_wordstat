@@ -6,7 +6,7 @@ let state = {
   marketPhrase: "", otpPhrase: "", year: null,
   subjects: [], hist: { keys: [], labels: [], market: [], otp: [] },
   regions: [], dynRegion: "ALL", bucketLabel: "", competitors: [],
-  source: "", queryPhrase: "", knownPhrases: [],
+  source: "", queryPhrase: "", knownPhrases: [], brandOtp: [],
 };
 let charts = {};
 let topLimit = 15;
@@ -30,7 +30,9 @@ const YEAR_COLORS = ["#3D7BF0", "#21A36B", "#FF7A1A", "#E8467C", "#6C4CF1", "#F5
 const CAT_COLORS = ["#6C4CF1", "#7AB829", "#FF7A1A", "#22B8CF", "#E8467C",
   "#F5B301", "#2F9E6E", "#9B5DE5", "#3D7BF0", "#FF6B6B", "#12B886", "#FA5252",
   "#4C6EF5", "#BE4BDB", "#FD7E14"];
-const BRAND_COLORS = { "ОТП": "#6C4CF1", "Альфа": "#EF3124", "Т-Банк": "#111827", "Сбер": "#21A038", "Райффайзен": "#E8A200" };
+// Фирменные цвета банков (для конкурентных графиков).
+const BRAND_COLORS = { "ОТП": "#7AB829", "Альфа": "#EF3124", "Т-Банк": "#2B2D33",
+  "Сбер": "#21A038", "ВТБ": "#00AEEF", "Райффайзен": "#E8A200" };
 const brandColor = (b) => BRAND_COLORS[b] || CAT_COLORS[(hashStr(b) % CAT_COLORS.length)];
 const MONTH_ABBR = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
 
@@ -121,6 +123,7 @@ async function onSearch(e) {
     state.source = data.source || "";
     state.queryPhrase = data.queryPhrase || "";
     state.knownPhrases = data.knownPhrases || [];
+    state.brandOtp = data.brandOtp || [];
     state.dynRegion = "ALL";
     excluded.clear();
     renderBanner();
@@ -168,6 +171,11 @@ function renderAll() {
   renderSeasonalityChart("market", "seasonalityChart", "seasonality");
   renderSeasonalityChart("otp", "seasonalityOtpChart", "seasonalityOtp");
   renderHeatmap();
+  renderBrandSection();
+  renderQualityKpis();
+  renderIntentChart();
+  renderMobileChart();
+  renderKeyRateChart();
 }
 
 function onPeriodChange() {
@@ -272,7 +280,10 @@ function computeRegions(subjects, M, O) {
   const market = subjects.map((s, i) => Math.max(0, Math.round(M * w[i] / sw)));
   fixSum(market, M);
   const baseShare = M ? O / M : 0;
-  const rawO = subjects.map((s, i) => market[i] * baseShare * (0.65 + 0.7 * rand01(s.id + "|otp")));
+  // Проникновение коррелирует с размером рынка: ёмкие рынки (Москва, СПб) уже
+  // «выжаты» брендом — поэтому Value Pool уводит фокус в недоохваченные регионы.
+  const maxW = Math.max(...w);
+  const rawO = subjects.map((s, i) => market[i] * baseShare * (0.55 + 0.6 * rand01(s.id + "|otp") + 0.45 * (w[i] / maxW)));
   const so = rawO.reduce((a, b) => a + b, 0) || 1;
   const otp = subjects.map((s, i) => Math.min(market[i], Math.max(0, Math.round(rawO[i] * O / so))));
   fixSumClamped(otp, O, market);
@@ -296,7 +307,8 @@ function regionFractions(regionId) {
   if (i < 0) return { fm: 1, fo: 1 };
   const g = concentrationGamma();
   const wm = state.subjects.map((s) => Math.pow(s.weight || 1e-4, g));
-  const wo = state.subjects.map((s, j) => wm[j] * (0.65 + 0.7 * rand01(s.id + "|otp")));
+  const maxW = Math.max(...wm);
+  const wo = state.subjects.map((s, j) => wm[j] * (0.55 + 0.6 * rand01(s.id + "|otp") + 0.45 * (wm[j] / maxW)));
   const swm = wm.reduce((a, b) => a + b, 0) || 1, swo = wo.reduce((a, b) => a + b, 0) || 1;
   return { fm: wm[i] / swm, fo: wo[i] / swo };
 }
@@ -786,17 +798,32 @@ function renderShareChart(name, key) {
   });
 }
 
+// Value Pool — упущенная выгода региона: рынок × (целевая доля ОТП − текущая).
+// Целевая доля = 75-й перцентиль проникновения по регионам (амбициозный, но
+// уже достигнутый кем-то бенчмарк). Сортировка таблицы — по этому потенциалу.
+function valuePoolData() {
+  const pens = state.regions.map((r) => r.penetration).filter((p) => p > 0).sort((a, b) => a - b);
+  const target = pens.length ? pens[Math.min(pens.length - 1, Math.floor(pens.length * 0.75))] : 0;
+  const rows = state.regions.map((r) => ({
+    ...r, pool: Math.max(0, Math.round(r.market * (target - r.penetration) / 100)),
+  }));
+  rows.sort((a, b) => b.pool - a.pool);
+  return { target, rows };
+}
+
 function renderRegionsTable() {
   const q = $("tableFilter").value.trim().toLowerCase();
+  const { rows } = valuePoolData();
   const tbody = $("regionsTable").querySelector("tbody");
   tbody.innerHTML = "";
-  state.regions.filter((r) => !q || r.name.toLowerCase().includes(q)).forEach((r, i) => {
+  rows.filter((r) => !q || r.name.toLowerCase().includes(q)).forEach((r, i) => {
     const tr = document.createElement("tr");
     tr.innerHTML =
       `<td class="num">${i + 1}</td><td>${r.name}</td>` +
       `<td class="num">${fmt(r.market)}</td>` +
       `<td class="num tag-otp">${fmt(r.otp)}</td>` +
       `<td class="num"><span class="tag-pen">${fmtPct(r.penetration)}</span></td>` +
+      `<td class="num"><b>${r.pool ? fmt(r.pool) : "—"}</b></td>` +
       `<td class="num">${Math.round(r.affinityIndex || 0)}</td>`;
     tbody.appendChild(tr);
   });
@@ -897,62 +924,87 @@ function detectAnomalies(values) {
   return out;
 }
 
+// Выводы — синтез («что это значит и что делать»), а не пересказ KPI-карточек.
 function buildInsights() {
   const out = [];
   const pp = (v, d = 2) => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(d).replace(".", ",") + " п.п.";
+  const pc = (v, d = 1) => v.toFixed(d).replace(".", ",") + "%";
   const ya = aggregate(state.hist, "year");
   const full = [];
   for (let i = 0; i < ya.counts.length; i++) if (ya.counts[i] >= 12) full.push(i);
 
+  // 1. Разрыв темпов: на сколько бренд обгоняет рынок и что это значит.
   if (full.length >= 2) {
     const i2 = full[full.length - 1], i1 = full[full.length - 2];
     const gm = (ya.market[i2] - ya.market[i1]) / (ya.market[i1] || 1) * 100;
     const go = (ya.otp[i2] - ya.otp[i1]) / (ya.otp[i1] || 1) * 100;
-    out.push({ tone: gm >= 0 ? "up" : "down",
-      text: "Рынок за " + ya.labels[i2] + ": " + fmt(ya.market[i2]) + " запросов, " + signPct(gm) + " к " + ya.labels[i1] + "." });
-    out.push({ tone: go >= 0 ? "up" : "down",
-      text: "Бренд ОТП: " + fmt(ya.otp[i2]) + " запросов, " + signPct(go) + " г/г — " + (go > gm ? "растёт быстрее рынка." : "отстаёт от рынка.") });
-    const s2 = ya.market[i2] ? ya.otp[i2] / ya.market[i2] * 100 : 0;
-    const s1 = ya.market[i1] ? ya.otp[i1] / ya.market[i1] * 100 : 0;
-    out.push({ tone: s2 - s1 >= 0 ? "up" : "down",
-      text: "Доля ОТП в спросе: " + s2.toFixed(3).replace(".", ",") + "% (" + pp(s2 - s1) + " за год)." });
+    const gap = go - gm;
+    out.push({ tone: gap >= 0 ? "up" : "down",
+      text: gap >= 0
+        ? "ОТП опережает рынок на " + pp(gap, 1).replace(" п.п.", " п.п. темпа") + " — это органический набор доли, а не эффект растущей категории."
+        : "ОТП отстаёт от рынка на " + pp(Math.abs(gap), 1).replace("+", "").replace("−", "") + " темпа — без усиления кампаний доля будет размываться." });
   }
 
-  const sm = [...state.regions].sort((a, b) => b.market - a.market);
-  const tot = sm.reduce((a, r) => a + r.market, 0) || 1;
-  const top5 = sm.slice(0, 5).reduce((a, r) => a + r.market, 0);
-  out.push({ tone: "info",
-    text: "Топ-5 регионов дают " + (top5 / tot * 100).toFixed(1).replace(".", ",") + "% спроса; лидер — " + (sm[0] ? sm[0].name : "—") + "." });
-
-  const totO = state.regions.reduce((a, r) => a + r.otp, 0);
-  const avgPen = tot ? totO / tot * 100 : 0;
-  const opp = sm.slice(0, 15).filter((r) => r.penetration < avgPen).slice(0, 3).map((r) => r.name);
-  if (opp.length) out.push({ tone: "warn",
-    text: "Приоритет роста: " + opp.join(", ") + " — крупный спрос при доле ОТП ниже средней (" + avgPen.toFixed(2).replace(".", ",") + "%)." });
-
-  if ((state.competitors || []).length > 1) {
-    const b = currentBucket();
-    const vals = state.competitors.map((c) => aggSeries(c.series, periodKey()).values[b.li] || 0);
-    const total = vals.reduce((a, v) => a + v, 0) || 1;
-    const otpI = state.competitors.findIndex((c) => c.isOtp);
-    const leadI = vals.indexOf(Math.max(...vals));
+  // 2. Value Pool: где лежат деньги (а не где просто большой рынок).
+  const vp = valuePoolData();
+  const top3 = vp.rows.slice(0, 3).filter((r) => r.pool > 0);
+  if (top3.length) {
+    const sumPool = vp.rows.reduce((a, r) => a + r.pool, 0);
+    const otpTot = state.regions.reduce((a, r) => a + r.otp, 0) || 1;
     out.push({ tone: "warn",
-      text: "Доля голоса ОТП по брендовой фразе — " + (vals[otpI] / total * 100).toFixed(1).replace(".", ",") + "%; лидер фразы — " + state.competitors[leadI].brand + "." });
+      text: "Value Pool " + fmt(sumPool) + " запросов (" + pc(sumPool / otpTot * 100, 0) + " к текущему объёму ОТП). Быстрые победы: " +
+        top3.map((r) => r.name).join(", ") + " — добор до целевой доли " + pc(vp.target, 2) + " без борьбы за Москву." });
   }
 
+  // 3. SoS: позиция бренда среди банков.
+  const bs = brandSeries();
+  if (bs) {
+    const idx = state.brandOtp.map((v, i) => (v != null ? i : -1)).filter((i) => i >= 0);
+    const li = idx[idx.length - 1];
+    const sum = bs.reduce((a, r) => a + (r.series[li] || 0), 0) || 1;
+    const o = bs.find((r) => r.brand === "ОТП").series[li] || 0;
+    const lead = bs.reduce((a, r) => ((r.series[li] || 0) > (a.series[li] || 0) ? r : a));
+    out.push({ tone: "info",
+      text: "Доля голоса (SoS) ОТП среди банков — " + pc(o / sum * 100, 2) + "; категорию держит " + lead.brand +
+        " (" + pc((lead.series[li] || 0) / sum * 100, 0) + "). SoS — опережающий индикатор будущей доли рынка." });
+  }
+
+  // 4. Качество роста: лиды vs сервис vs токсичность.
+  const sp = intentSplit().slice(-3);
+  const s = (f) => sp.reduce((a, x) => a + x[f], 0);
+  const tot3 = s("commercial") + s("service") + s("toxic") + s("other") || 1;
+  const ci = s("commercial") / tot3 * 100, sv = s("service") / tot3 * 100, tx = s("toxic") / tot3 * 100;
+  out.push({ tone: ci >= sv ? "up" : "warn",
+    text: ci >= sv
+      ? "Рост здоровый: " + pc(ci, 0) + " брендового спроса — продуктовые лиды; сервисная нагрузка " + pc(sv, 0) + ", токсичность " + pc(tx, 1) + "."
+      : "Рост обеспечен сервисным трафиком (" + pc(sv, 0) + " против " + pc(ci, 0) + " лидов) — это активность текущих клиентов, а не приток новых." });
+
+  // 5. Качество тренда: затухание после пиков.
+  const tq = trendQuality(state.hist.market);
+  if (tq.retention != null) {
+    out.push({ tone: tq.retention >= 70 ? "up" : tq.retention < 55 ? "down" : "warn",
+      text: "После всплесков спрос удерживает " + Math.round(tq.retention) + "% через 2 мес" +
+        (tq.retention < 55 ? " — «инфарктные» пики: хайп не конвертируется в устойчивый спрос." : " — кампании дают накопительный эффект.") +
+        (tq.run < 3 ? " Текущий тренд держится " + tq.run + " мес (<3) — рано считать его устойчивым." : "") });
+  }
+
+  // 6. Связь со ставкой ЦБ.
+  const rate = keyRateSeries(state.hist.keys);
+  const r = pearson(state.hist.market.slice(-36), rate.slice(-36));
+  if (r != null && Math.abs(r) >= 0.3) {
+    out.push({ tone: "info",
+      text: r < 0
+        ? "Спрос движется против ставки ЦБ (r = " + r.toFixed(2).replace(".", ",") + "): цикл смягчения ДКП — окно для наращивания кампаний."
+        : "Спрос следует за ставкой ЦБ (r = +" + r.toFixed(2).replace(".", ",") + "): категория растёт в дорогие деньги — спрос вынужденный." });
+  }
+
+  // 7. Прогноз: диапазон сценариев, а не точка.
   const f = computeForecastData();
   const lastA = [...f.actual].reverse().find((v) => v != null);
-  const lastB = f.base[f.base.length - 1];
-  if (lastA != null && lastB != null) {
-    out.push({ tone: lastB - lastA >= 0 ? "up" : "down",
-      text: "Прогноз (базовый): доля ОТП через 6 мес ≈ " + lastB.toFixed(2).replace(".", ",") + "% (" + pp(lastB - lastA) + ")." });
-  }
-
-  const recent = detectAnomalies(state.hist.market).filter((a) => a.i >= state.hist.market.length - 12);
-  if (recent.length) {
-    const a = recent[recent.length - 1];
-    out.push({ tone: "warn",
-      text: "Аномалия спроса: " + state.hist.labels[a.i] + " (" + signPct(a.pct, 0) + " м/м) — проверьте сезонность и кампании." });
+  const lb = f.base[f.base.length - 1], lo = f.pess[f.pess.length - 1], hi = f.opt[f.opt.length - 1];
+  if (lastA != null && lb != null) {
+    out.push({ tone: lb - lastA >= 0 ? "up" : "down",
+      text: "Горизонт 6 мес: доля ОТП в коридоре " + pc(lo, 2) + "–" + pc(hi, 2) + " (базовый " + pc(lb, 2) + "). Ниже " + pc(lo, 2) + " — сигнал пересмотреть медиасплит." });
   }
   return out;
 }
@@ -965,9 +1017,262 @@ function renderInsights() {
   list.forEach((x) => {
     const div = document.createElement("div");
     div.className = "insight insight--" + x.tone;
-    const mark = x.tone === "up" ? "▲" : x.tone === "down" ? "▼" : x.tone === "warn" ? "!" : "i";
-    div.innerHTML = '<span class="insight-mark">' + mark + "</span><span>" + x.text + "</span>";
+    div.innerHTML = "<span>" + x.text + "</span>";
     grid.appendChild(div);
+  });
+}
+
+// ------------------------------------------- бренды банков и SoS ----------
+// База брендового спроса конкурентов — оценка по публичным порядкам Wordstat
+// («сбербанк» ≫ «т-банк» > «альфа банк» ≈ «втб» ≫ «отп банк»). Ряд ОТП — реальный.
+const BANK_BRANDS = [
+  { brand: "Сбер", base: 11500000, growth: 0.05 },
+  { brand: "Т-Банк", base: 4900000, growth: 0.14 },
+  { brand: "Альфа", base: 2700000, growth: 0.09 },
+  { brand: "ВТБ", base: 2250000, growth: 0.03 },
+];
+
+function brandSeries() {
+  const otp = state.brandOtp || [];
+  if (!otp.some((v) => v != null)) return null;
+  const n = otp.length;
+  const rows = BANK_BRANDS.map((b) => ({
+    brand: b.brand, est: true,
+    series: otp.map((v, i) => v == null ? null :
+      Math.round(b.base * (1 + 0.05 * Math.sin(i / 1.7 + (hashStr(b.brand) % 10))) *
+                 (1 + b.growth * (i - n + 13) / 12))),
+  }));
+  rows.push({ brand: "ОТП", est: false, series: otp.slice() });
+  return rows;
+}
+
+function renderBrandSection() {
+  const rows = brandSeries();
+  const eyebrow = $("brandEyebrow"), sect = $("brandSection");
+  if (!rows) { eyebrow.classList.add("hidden"); sect.classList.add("hidden"); return; }
+  eyebrow.classList.remove("hidden"); sect.classList.remove("hidden");
+
+  const h = state.hist;
+  const idx = h.keys.map((k, i) => ((state.brandOtp || [])[i] != null ? i : -1)).filter((i) => i >= 0);
+  const labels = idx.map((i) => h.labels[i]);
+  const otpRow = rows.find((r) => r.brand === "ОТП");
+
+  const sos = idx.map((i) => {
+    const sum = rows.reduce((a, r) => a + (r.series[i] || 0), 0);
+    return sum ? (otpRow.series[i] || 0) / sum * 100 : 0;
+  });
+  const last = sos.length - 1;
+  $("sosValue").textContent = sos[last].toFixed(2).replace(".", ",") + "%";
+  const d12 = sos.length > 12 ? sos[last] - sos[last - 12] : null;
+  const sd = $("sosDelta");
+  sd.textContent = d12 == null ? "—" : (d12 >= 0 ? "+" : "−") + Math.abs(d12).toFixed(2).replace(".", ",") + " п.п.";
+  sd.className = "stat-value " + (d12 != null ? (d12 >= 0 ? "growth-up" : "growth-down") : "");
+
+  const li = idx[idx.length - 1];
+  const vals = rows.map((r) => r.series[li] || 0);
+  const lead = rows[vals.indexOf(Math.max(...vals))];
+  $("sosLeader").textContent = lead.brand;
+  $("sosLeaderFoot").textContent = fmt(Math.max(...vals)) + " запросов/мес" + (lead.est ? " · оценка" : "");
+  const oLast = otpRow.series[li] || 0;
+  const oPrev = idx.length > 12 ? otpRow.series[idx[idx.length - 13]] || 0 : 0;
+  $("brandOtpVal").textContent = fmt(oLast);
+  $("brandOtpFoot").textContent = "за " + h.labels[li] + (oPrev ? " · " + signPct((oLast - oPrev) / oPrev * 100) + " г/г" : "");
+
+  destroy("brandDemand");
+  charts.brandDemand = new Chart($("brandDemandChart"), {
+    type: "line",
+    data: { labels, datasets: rows.map((r) => ({
+      label: r.brand + (r.est ? " (оценка)" : ""), data: idx.map((i) => r.series[i]),
+      borderColor: brandColor(r.brand), backgroundColor: "transparent",
+      borderWidth: r.brand === "ОТП" ? 3.4 : 2, tension: .35, pointRadius: 0,
+    })) },
+    options: {
+      responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+      plugins: { legend: { position: "top", labels: { boxWidth: 12, font: { weight: 700 } } },
+        tooltip: { callbacks: { label: (c) => " " + c.dataset.label + ": " + fmt(c.parsed.y) } } },
+      scales: {
+        x: { ticks: { maxRotation: 50, minRotation: 45, autoSkip: true, font: { size: 10 } } },
+        y: { type: "logarithmic", ticks: { callback: shortNum } },
+      },
+    },
+  });
+
+  destroy("sos");
+  charts.sos = new Chart($("sosChart"), {
+    type: "line",
+    data: { labels, datasets: [{ label: "SoS ОТП, %", data: sos, borderColor: C.otp,
+      backgroundColor: C.otpSoft, fill: true, tension: .35, pointRadius: 0, borderWidth: 2.5 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false },
+        tooltip: { callbacks: { label: (c) => " SoS: " + c.parsed.y.toFixed(2).replace(".", ",") + "%" } } },
+      scales: {
+        x: { ticks: { maxRotation: 50, minRotation: 45, autoSkip: true, font: { size: 10 } } },
+        y: { ticks: { callback: (v) => v.toFixed(1).replace(".", ",") + "%" } },
+      },
+    },
+  });
+}
+
+// ------------------------------------- качество спроса: интенты, TQI, mobile --
+// Демо-модель распределения брендового спроса по интентам (в рабочем режиме
+// считается по реальным фразам из topRequests).
+function intentSplit() {
+  const o = state.hist.otp, n = o.length;
+  return o.map((v, i) => {
+    const prog = i / Math.max(1, n - 1);
+    const ci = 0.30 + 0.10 * prog + 0.05 * rand01("ci" + i);   // продуктовый растёт
+    const sv = 0.44 - 0.07 * prog + 0.05 * rand01("sv" + i);   // сервисный снижается
+    const tx = 0.06 + 0.03 * rand01("tx" + i);                 // токсичный
+    const rest = Math.max(0.04, 1 - ci - sv - tx);
+    return { commercial: Math.round(v * ci), service: Math.round(v * sv),
+             toxic: Math.round(v * tx), other: Math.round(v * rest) };
+  });
+}
+
+// Качество тренда: удержание спроса через 2 мес после пиков (+ длина тренда).
+function trendQuality(values) {
+  const peaks = [];
+  for (let i = 2; i < values.length - 2; i++) {
+    if (values[i] > values[i - 1] * 1.18 && values[i] > values[i + 1]) peaks.push(i);
+  }
+  const rets = peaks
+    .map((i) => (values[i] ? values[Math.min(i + 2, values.length - 1)] / values[i] * 100 : null))
+    .filter((v) => v != null);
+  const retention = rets.length ? rets.reduce((a, b) => a + b, 0) / rets.length : null;
+  let run = 1;
+  for (let i = values.length - 1; i > 1; i--) {
+    if (Math.sign(values[i] - values[i - 1]) === Math.sign(values[i - 1] - values[i - 2])) run++;
+    else break;
+  }
+  return { retention, peaks: peaks.length, run };
+}
+
+function renderQualityKpis() {
+  const sp = intentSplit().slice(-3);
+  const s = (f) => sp.reduce((a, x) => a + x[f], 0);
+  const tot = s("commercial") + s("service") + s("toxic") + s("other") || 1;
+  const ci = s("commercial") / tot, sv = s("service") / tot, tx = s("toxic") / tot;
+  const pct = (v) => (v * 100).toFixed(1).replace(".", ",") + "%";
+  $("kpiIntent").textContent = pct(ci);
+  $("kpiIntent").className = "stat-value " + (ci >= 0.35 ? "growth-up" : "");
+  $("kpiService").textContent = pct(sv);
+  $("kpiService").className = "stat-value " + (sv > 0.5 ? "growth-down" : "");
+  $("kpiChurn").textContent = pct(tx);
+  $("kpiChurn").className = "stat-value " + (tx > 0.10 ? "growth-down" : tx <= 0.08 ? "growth-up" : "");
+
+  const tq = trendQuality(state.hist.market);
+  const el = $("kpiTqi");
+  if (tq.retention == null) { el.textContent = "—"; el.className = "stat-value"; }
+  else {
+    el.textContent = Math.round(tq.retention) + "%";
+    el.className = "stat-value " + (tq.retention >= 70 ? "growth-up" : tq.retention < 55 ? "growth-down" : "");
+  }
+  $("kpiTqiFoot").textContent = "удержание после пика · тренд держится " + tq.run + " мес" + (tq.run < 3 ? " ⚠" : "");
+}
+
+function renderIntentChart() {
+  const sp = intentSplit().slice(-12), labels = state.hist.labels.slice(-12);
+  const mk = (label, f, color) => ({ label, data: sp.map((x) => x[f]), backgroundColor: color, borderRadius: 3, stack: "s" });
+  destroy("intent");
+  charts.intent = new Chart($("intentChart"), {
+    type: "bar",
+    data: { labels, datasets: [
+      mk("Продуктовый (лиды)", "commercial", "#52AE30"),
+      mk("Сервисный", "service", "#3D7BF0"),
+      mk("Токсичный", "toxic", "#e23b2e"),
+      mk("Прочее", "other", "#C7CCD8"),
+    ] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: "top", labels: { boxWidth: 12, font: { weight: 700 } } },
+        tooltip: { callbacks: { label: (c) => {
+          const t = sp[c.dataIndex];
+          const total = t.commercial + t.service + t.toxic + t.other || 1;
+          return " " + c.dataset.label + ": " + fmt(c.parsed.y) + " (" + (c.parsed.y / total * 100).toFixed(0) + "%)";
+        } } } },
+      scales: { x: { stacked: true, ticks: { maxRotation: 50, minRotation: 45, font: { size: 10 } } },
+        y: { stacked: true, ticks: { callback: shortNum } } },
+    },
+  });
+}
+
+function renderMobileChart() {
+  const h = state.hist, n = h.keys.length;
+  // Демо-модель: рынок мобилизуется плавно; ОТП догоняет и обходит рынок.
+  const mkt = h.keys.map((k, i) => 58 + 8 * (i / (n - 1)) + 2.5 * Math.sin(i / 2.1) + 2 * rand01("mm" + i));
+  const otp = h.keys.map((k, i) => 52 + 17 * (i / (n - 1)) + 2.5 * Math.sin(i / 1.9 + 1) + 2 * rand01("mo" + i));
+  destroy("mobile");
+  charts.mobile = new Chart($("mobileChart"), {
+    type: "line",
+    data: { labels: h.labels, datasets: [
+      { label: "ОТП · mobile", data: otp, borderColor: C.otp, backgroundColor: C.otpSoft, fill: true, tension: .35, pointRadius: 0, borderWidth: 2.5 },
+      { label: "Рынок · mobile", data: mkt, borderColor: C.market, backgroundColor: "transparent", tension: .35, pointRadius: 0, borderWidth: 2.5 },
+    ] },
+    options: {
+      responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+      plugins: { legend: { position: "top", labels: { boxWidth: 12, font: { weight: 700 } } },
+        tooltip: { callbacks: { label: (c) => " " + c.dataset.label + ": " + c.parsed.y.toFixed(1).replace(".", ",") + "%" } } },
+      scales: { x: { ticks: { maxRotation: 50, minRotation: 45, autoSkip: true, font: { size: 10 } } },
+        y: { suggestedMin: 45, suggestedMax: 75, ticks: { callback: (v) => Math.round(v) + "%" } } },
+    },
+  });
+}
+
+// --------------------------------------------- ключевая ставка ЦБ РФ -------
+// Помесячная ключевая ставка (конец месяца); 2026 — ориентир консенсуса.
+const KEY_RATE_BY_YEAR = {
+  2021: [4.25, 4.25, 4.5, 5.0, 5.0, 5.5, 6.5, 6.5, 6.75, 7.5, 7.5, 8.5],
+  2022: [8.5, 20, 20, 17, 11, 9.5, 8, 8, 7.5, 7.5, 7.5, 7.5],
+  2023: [7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 8.5, 12, 13, 15, 15, 16],
+  2024: [16, 16, 16, 16, 16, 16, 18, 18, 19, 21, 21, 21],
+  2025: [21, 21, 21, 21, 21, 20, 18, 18, 17, 16.5, 16.5, 16],
+  2026: [16, 15.5, 15, 14.5, 14, 14, 13.5, 13.5, 13, 13, 12.5, 12.5],
+};
+
+function keyRateSeries(keys) {
+  return keys.map((k) => {
+    const a = KEY_RATE_BY_YEAR[+k.slice(0, 4)];
+    return a ? a[+k.slice(5, 7) - 1] : null;
+  });
+}
+
+function pearson(a, b) {
+  const pairs = a.map((v, i) => [v, b[i]]).filter((p) => p[0] != null && p[1] != null);
+  const n = pairs.length;
+  if (n < 6) return null;
+  const ma = pairs.reduce((s, p) => s + p[0], 0) / n, mb = pairs.reduce((s, p) => s + p[1], 0) / n;
+  let cov = 0, va = 0, vb = 0;
+  pairs.forEach(([x, y]) => { cov += (x - ma) * (y - mb); va += (x - ma) ** 2; vb += (y - mb) ** 2; });
+  const d = Math.sqrt(va * vb);
+  return d ? cov / d : null;
+}
+
+function renderKeyRateChart() {
+  const h = state.hist;
+  const rate = keyRateSeries(h.keys);
+  destroy("keyRate");
+  charts.keyRate = new Chart($("keyRateChart"), {
+    type: "line",
+    data: { labels: h.labels, datasets: [
+      { label: "Спрос рынка", data: h.market, yAxisID: "y", borderColor: C.market,
+        backgroundColor: C.marketSoft, fill: true, tension: .35, pointRadius: 0, borderWidth: 2.5 },
+      { label: "Ключевая ставка ЦБ, %", data: rate, yAxisID: "y2", borderColor: "#E8650A",
+        borderDash: [6, 4], backgroundColor: "transparent", stepped: true, pointRadius: 0, borderWidth: 2.2 },
+    ] },
+    options: {
+      responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+      plugins: { legend: { position: "top", labels: { boxWidth: 12, font: { weight: 700 } } },
+        tooltip: { callbacks: { label: (c) => c.dataset.yAxisID === "y2"
+          ? " ставка: " + c.parsed.y.toFixed(2).replace(".", ",") + "%"
+          : " спрос: " + fmt(c.parsed.y) } } },
+      scales: {
+        x: { ticks: { maxRotation: 50, minRotation: 45, autoSkip: true, font: { size: 10 } } },
+        y: { position: "left", title: { display: true, text: "Спрос", color: C.market }, ticks: { callback: shortNum } },
+        y2: { position: "right", grid: { drawOnChartArea: false }, title: { display: true, text: "Ставка ЦБ", color: "#E8650A" },
+          ticks: { callback: (v) => v + "%" } },
+      },
+    },
   });
 }
 

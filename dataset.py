@@ -143,6 +143,9 @@ def _load():
             if nk in _COMPETITOR_MAP:
                 cat, brand = _COMPETITOR_MAP[nk]
                 competitors.setdefault(cat, []).append({"brand": brand, "series": series(r)})
+            elif nk == "отп банк":
+                # Реальный брендовый спрос ОТП (строка «ОТП Банк» в выгрузке).
+                _cache["otp_brand"] = series(r)
         _cache["competitors"] = competitors
 
     _cache["products"] = products
@@ -179,6 +182,16 @@ def product(key):
 
 def known_phrases():
     return [p["base"] for p in _load().values()]
+
+
+def otp_brand_series():
+    """Реальный брендовый спрос «ОТП Банк» по месяцам (None — нет данных),
+    выровнен по _ordered_keys()."""
+    _load()
+    s = _cache.get("otp_brand")
+    if not s:
+        return []
+    return [s.get(k) for k in _ordered_keys()]
 
 
 def competitor_series(key):
