@@ -61,7 +61,6 @@ const quadrantPlugin = {
 };
 
 document.addEventListener("DOMContentLoaded", () => {
-  checkStatus();
   $("searchForm").addEventListener("submit", onSearch);
   $("exportBtn").addEventListener("click", onExport);
   $("tableFilter").addEventListener("input", renderRegionsTable);
@@ -89,15 +88,6 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 });
-
-async function checkStatus() {
-  try {
-    const s = await (await fetch("/api/status")).json();
-    const badge = $("modeBadge");
-    badge.textContent = s.demo ? "демо-режим" : "рабочий режим";
-    badge.className = "badge " + (s.demo ? "badge--demo" : "badge--live");
-  } catch (e) { /* игнорируем */ }
-}
 
 async function onSearch(e) {
   e.preventDefault();
@@ -151,13 +141,7 @@ function renderBanner() {
     } else { el.classList.add("hidden"); }
     return;
   }
-  if (state.source === "api") { el.classList.add("hidden"); return; }
-  // synthetic
-  el.className = "banner banner--warn";
-  el.innerHTML = "⚠ <b>Демонстрационные данные.</b> Реальные данные доступны только для: <b>" +
-    (state.knownPhrases || []).join(", ") + "</b>. Для произвольных запросов нужен рабочий ключ Yandex Wordstat API " +
-    "(сейчас приложение работает в демо-режиме).";
-  el.classList.remove("hidden");
+  el.classList.add("hidden");
 }
 
 function renderAll() {
@@ -453,10 +437,6 @@ function renderRegionsChart() {
 
 function renderDynamicsChart() {
   const agg = aggregate(currentDynHist(), periodKey());
-  // Оранжевые маркеры — аномальные изменения спроса (|z| ≥ 2 по м/м темпам).
-  const anomalySet = new Set(detectAnomalies(agg.market).map((a) => a.i));
-  const pr = agg.market.map((_, i) => (anomalySet.has(i) ? 4.5 : 0));
-  const pbg = agg.market.map((_, i) => (anomalySet.has(i) ? C.orange : C.market));
   destroy("dynamics");
   charts.dynamics = new Chart($("dynamicsChart"), {
     type: "line",
@@ -464,8 +444,7 @@ function renderDynamicsChart() {
       labels: agg.labels,
       datasets: [
         { label: "ОТП", data: agg.otp, yAxisID: "yOtp", borderColor: C.otp, backgroundColor: C.otpSoft, fill: true, tension: .35, pointRadius: 0, borderWidth: 2.5 },
-        { label: "Рынок", data: agg.market, yAxisID: "yMarket", borderColor: C.market, backgroundColor: C.marketSoft, fill: false, tension: .35,
-          pointRadius: pr, pointBackgroundColor: pbg, pointBorderColor: pbg, borderWidth: 2.5 },
+        { label: "Рынок", data: agg.market, yAxisID: "yMarket", borderColor: C.market, backgroundColor: C.marketSoft, fill: false, tension: .35, pointRadius: 0, borderWidth: 2.5 },
       ],
     },
     options: {
@@ -477,9 +456,7 @@ function renderDynamicsChart() {
           afterBody: (items) => {
             const i = items[0].dataIndex;
             const m = agg.market[i], o = agg.otp[i];
-            const lines = m ? ["доля ОТП: " + (o / m * 100).toFixed(2).replace(".", ",") + "%"] : [];
-            if (anomalySet.has(i)) lines.push("⚠ аномальное изменение спроса");
-            return lines;
+            return m ? ["доля ОТП: " + (o / m * 100).toFixed(2).replace(".", ",") + "%"] : [];
           },
         } },
       },
@@ -848,24 +825,6 @@ async function onExport() {
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   } catch (err) { showError(err.message); }
   finally { btn.disabled = false; btn.textContent = label; }
-}
-
-// -------------------------------------------- аномалии и ключевые выводы --
-function detectAnomalies(values) {
-  // |z| ≥ 2 по темпам м/м (и сам скачок ≥ 20%) — отсев сезонного шума.
-  if (!values || values.length < 10) return [];
-  const pct = [];
-  for (let i = 1; i < values.length; i++) {
-    const p = values[i - 1];
-    pct.push(p ? (values[i] - p) / p * 100 : 0);
-  }
-  const mean = pct.reduce((a, b) => a + b, 0) / pct.length;
-  const sd = Math.sqrt(pct.reduce((a, b) => a + (b - mean) * (b - mean), 0) / pct.length) || 1;
-  const out = [];
-  pct.forEach((v, j) => {
-    if (Math.abs((v - mean) / sd) >= 2 && Math.abs(v) >= 20) out.push({ i: j + 1, pct: v });
-  });
-  return out;
 }
 
 // ------------------------------------------- бренды банков и SoS ----------

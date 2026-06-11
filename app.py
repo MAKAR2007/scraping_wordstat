@@ -43,6 +43,11 @@ app = Flask(__name__, static_folder="static", static_url_path="")
 # Индекс субъектов кэшируется на время жизни процесса.
 _subject_index_cache = {"value": None}
 
+# Если API ответил ошибкой — не мучаем его ретраями на каждый запрос,
+# а на время уходим в локальные данные (предохранитель).
+_api_down_until = {"t": 0.0}
+_API_COOLDOWN = 120  # сек
+
 
 def get_subject_index(client):
     if _subject_index_cache["value"] is None:
@@ -81,14 +86,21 @@ def search():
         return jsonify({"error": "Не задана ключевая фраза"}), 400
 
     devices = payload.get("devices") or None
-    client = WordstatClient()
+    import time as _time
+    cooled = _time.time() < _api_down_until["t"]
+    client = WordstatClient(force_demo=cooled)
     index = get_subject_index(client)
 
     try:
         key, base, otp_name, hist, year, _my, _oy = \
             _phrase_history(phrase, devices, client, index)
-    except YandexError as exc:
-        return jsonify({"error": str(exc)}), 502
+    except YandexError:
+        # API недоступен (права/квота/сеть) — не роняем сайт, а прозрачно
+        # откатываемся на локальные данные (CSV для известных продуктов).
+        _api_down_until["t"] = _time.time() + _API_COOLDOWN
+        client = WordstatClient(force_demo=True)
+        key, base, otp_name, hist, year, _my, _oy = \
+            _phrase_history(phrase, devices, client, index)
 
     # Регионы (числа/доли/лидеры) считаются на клиенте под выбранный период.
     # Рабочий режим: веса = реальное распределение фразы по субъектам из API;

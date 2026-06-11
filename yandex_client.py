@@ -41,14 +41,17 @@ class YandexError(RuntimeError):
 
 
 class WordstatClient:
-    def __init__(self):
+    def __init__(self, force_demo=False):
         self.api_key = os.environ.get("YANDEX_API_KEY", "").strip()
         self.iam_token = os.environ.get("YANDEX_IAM_TOKEN", "").strip()
         self.folder_id = os.environ.get("YANDEX_FOLDER_ID", "").strip()
+        # force_demo — аварийный откат на локальные данные (CSV/модель),
+        # когда ключ есть, но API отвечает ошибкой (нет прав/квоты/сети).
+        self._force_demo = bool(force_demo)
 
     @property
     def demo_mode(self):
-        return not (self.api_key or self.iam_token)
+        return self._force_demo or not (self.api_key or self.iam_token)
 
     # ---------------------------------------------------------------- HTTP --
     def _auth_header(self):
