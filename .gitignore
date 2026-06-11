@@ -11,3 +11,7 @@ venv/
 
 # ОС
 .DS_Store
+
+# сборка десктоп-приложения (PyInstaller)
+build/
+dist/
