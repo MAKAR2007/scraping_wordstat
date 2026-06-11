@@ -20,6 +20,7 @@ import hashlib
 import json
 import math
 import os
+import time
 import urllib.error
 import urllib.request
 
@@ -27,6 +28,12 @@ from regions import RUSSIA_TREE, build_subject_index
 
 BASE_URL = "https://searchapi.api.cloud.yandex.net/v2/wordstat"
 TIMEOUT = 30
+
+# Wordstat API ограничивает частоту запросов (при бурсте отдаёт 403, а не 429),
+# поэтому держим паузу между вызовами и ретраим транзиентные ошибки.
+_MIN_INTERVAL = 0.35
+_RETRIES = 3
+_last_call = {"t": 0.0}
 
 
 class YandexError(RuntimeError):
@@ -56,23 +63,41 @@ class WordstatClient:
         if self.folder_id:
             body.setdefault("folderId", self.folder_id)
         data = json.dumps(body).encode("utf-8")
-        req = urllib.request.Request(
-            BASE_URL + path,
-            data=data,
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": self._auth_header(),
-            },
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace")
-            raise YandexError("Ошибка API %s: %s" % (exc.code, detail))
-        except urllib.error.URLError as exc:
-            raise YandexError("Сетевая ошибка: %s" % exc.reason)
+
+        last_err = None
+        for attempt in range(_RETRIES + 1):
+            wait = _MIN_INTERVAL - (time.monotonic() - _last_call["t"])
+            if wait > 0:
+                time.sleep(wait)
+            req = urllib.request.Request(
+                BASE_URL + path,
+                data=data,
+                method="POST",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": self._auth_header(),
+                },
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+                    _last_call["t"] = time.monotonic()
+                    return json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                _last_call["t"] = time.monotonic()
+                detail = exc.read().decode("utf-8", "replace")
+                last_err = YandexError("Ошибка API %s: %s" % (exc.code, detail))
+                # 403/429/5xx при бурсте — транзиентные, пробуем ещё раз.
+                if exc.code in (403, 429, 500, 502, 503, 504) and attempt < _RETRIES:
+                    time.sleep(1.0 + attempt)
+                    continue
+                raise last_err
+            except urllib.error.URLError as exc:
+                last_err = YandexError("Сетевая ошибка: %s" % exc.reason)
+                if attempt < _RETRIES:
+                    time.sleep(1.0 + attempt)
+                    continue
+                raise last_err
+        raise last_err
 
     # ----------------------------------------------------------- methods ---
     def get_regions_tree(self):
@@ -137,10 +162,13 @@ class WordstatClient:
         """Месячный ряд частот по списку ключей ['YYYY-MM', ...] (агрегат РФ).
 
         Для неизвестных фраз — синтетика; в рабочем режиме — помесячный API.
+        API требует, чтобы toDate был ПОСЛЕДНИМ днём месяца.
         """
+        import calendar
+        y, m = int(keys[-1][:4]), int(keys[-1][5:7])
         win = {"months": keys, "period": "PERIOD_MONTHLY",
                "fromDate": keys[0] + "-01T00:00:00Z",
-               "toDate": keys[-1] + "-28T00:00:00Z"}
+               "toDate": "%04d-%02d-%02dT00:00:00Z" % (y, m, calendar.monthrange(y, m)[1])}
         res = self.dynamics_window(phrase, win, region_id="ALL",
                                    all_region_ids=None, devices=devices)
         by = {(r.get("date") or "")[:7]: _int(r.get("count")) for r in res.get("results") or []}

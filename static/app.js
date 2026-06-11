@@ -6,7 +6,7 @@ let state = {
   marketPhrase: "", otpPhrase: "", year: null,
   subjects: [], hist: { keys: [], labels: [], market: [], otp: [] },
   regions: [], dynRegion: "ALL", bucketLabel: "", competitors: [],
-  source: "", queryPhrase: "", knownPhrases: [], brandOtp: [],
+  source: "", queryPhrase: "", knownPhrases: [], brandOtp: [], mobile: null,
 };
 let charts = {};
 let topLimit = 15;
@@ -124,6 +124,7 @@ async function onSearch(e) {
     state.queryPhrase = data.queryPhrase || "";
     state.knownPhrases = data.knownPhrases || [];
     state.brandOtp = data.brandOtp || [];
+    state.mobile = data.mobile || null;
     state.dynRegion = "ALL";
     excluded.clear();
     renderBanner();
@@ -1047,9 +1048,22 @@ function renderIntentChart() {
 
 function renderMobileChart() {
   const h = state.hist, n = h.keys.length;
-  // Демо-модель: рынок мобилизуется плавно; ОТП догоняет и обходит рынок.
-  const mkt = h.keys.map((k, i) => 58 + 8 * (i / (n - 1)) + 2.5 * Math.sin(i / 2.1) + 2 * rand01("mm" + i));
-  const otp = h.keys.map((k, i) => 52 + 17 * (i / (n - 1)) + 2.5 * Math.sin(i / 1.9 + 1) + 2 * rand01("mo" + i));
+  const panel = $("mobileChart").closest(".panel");
+  let mkt, otp;
+  if (state.mobile && state.mobile.market) {
+    // Рабочий режим: реальный срез API по устройствам (phone ÷ all, %).
+    mkt = h.market.map((v, i) => (v ? Math.min(100, state.mobile.market[i] / v * 100) : null));
+    otp = h.otp.map((v, i) => (v ? Math.min(100, state.mobile.otp[i] / v * 100) : null));
+  } else if (state.source !== "api") {
+    // Демо-модель: рынок мобилизуется плавно; ОТП догоняет и обходит рынок.
+    mkt = h.keys.map((k, i) => 58 + 8 * (i / (n - 1)) + 2.5 * Math.sin(i / 2.1) + 2 * rand01("mm" + i));
+    otp = h.keys.map((k, i) => 52 + 17 * (i / (n - 1)) + 2.5 * Math.sin(i / 1.9 + 1) + 2 * rand01("mo" + i));
+  } else {
+    // Live с выбранным устройством: знаменателя «все устройства» нет — прячем.
+    panel.classList.add("hidden");
+    return;
+  }
+  panel.classList.remove("hidden");
   destroy("mobile");
   charts.mobile = new Chart($("mobileChart"), {
     type: "line",

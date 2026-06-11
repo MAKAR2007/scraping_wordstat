@@ -91,11 +91,16 @@ def search():
         return jsonify({"error": str(exc)}), 502
 
     # Регионы (числа/доли/лидеры) считаются на клиенте под выбранный период.
-    # Веса — реалистичные (по населению/спросу), сумма по РФ = тотал из выгрузки.
-    names = list(index["subjects"].values())
-    ws = region_weights.weights_for(names)
-    subjects = [{"id": sid, "name": name, "weight": w}
-                for (sid, name), w in zip(index["subjects"].items(), ws)]
+    # Рабочий режим: веса = реальное распределение фразы по субъектам из API;
+    # демо (или сбой API): модель по населению/спросу.
+    subjects = None
+    if not client.demo_mode:
+        subjects = _live_subjects(client, base, devices, index)
+    if subjects is None:
+        names = list(index["subjects"].values())
+        ws = region_weights.weights_for(names)
+        subjects = [{"id": sid, "name": name, "weight": w}
+                    for (sid, name), w in zip(index["subjects"].items(), ws)]
 
     # Конкурентный анализ: бренды в категории (масштаб по устройству как у ОТП).
     of = _device_factors(devices)[1]
@@ -110,6 +115,20 @@ def search():
     source = "csv" if (client.demo_mode and dataset.lookup(phrase)) else (
         "api" if not client.demo_mode else "synthetic")
 
+    # Реальный мобильный срез (для графика «Mobile-спрос»): только в рабочем
+    # режиме и только когда выбраны «Все устройства» (иначе знаменатель не ALL).
+    mobile = None
+    if not client.demo_mode and _api_devices(devices) is None:
+        try:
+            mobile = {
+                "market": client.monthly_history(base, hist["keys"],
+                                                 devices=["DEVICE_PHONE"]),
+                "otp": client.monthly_history(otp_name, hist["keys"],
+                                              devices=["DEVICE_PHONE"]),
+            }
+        except YandexError:
+            mobile = None
+
     return jsonify({
         "marketPhrase": base,
         "otpPhrase": otp_name,
@@ -120,8 +139,11 @@ def search():
         "year": year,
         "subjects": subjects,
         "competitors": competitors,
-        # Реальный брендовый спрос «ОТП Банк» (для SoS-аналитики банков).
-        "brandOtp": dataset.otp_brand_series() if client.demo_mode else [],
+        # Реальный брендовый спрос «ОТП Банк» (для SoS-аналитики банков):
+        # демо — из выгрузки CSV, рабочий режим — из API за те же 48 месяцев.
+        "brandOtp": _brand_otp_series(client, hist),
+        # Мобильный срез рынка и ОТП (только рабочий режим, «Все устройства»).
+        "mobile": mobile,
         "dynamics": hist,            # полная месячная история {keys,labels,market,otp}
         "excluded": {
             "federalDistricts": len(index["federal_districts"]),
@@ -165,36 +187,85 @@ def _device_factors(devices):
     return _DEVICE_FACTORS.get(str(devices[0]).upper(), (1.0, 1.0))
 
 
+def _api_devices(devices):
+    """Devices для API: None = все устройства (DEVICE_ALL не передаём)."""
+    if not devices:
+        return None
+    d = [str(x).upper() for x in devices if x]
+    if not d or d == ["DEVICE_ALL"]:
+        return None
+    return d
+
+
 def _phrase_history(phrase, devices, client, index):
     """Единый источник данных по фразе.
 
     Возвращает (key, base, otpName, hist, year, market_year, otp_year), где
     hist — полная месячная история {keys,labels,market,otp}, а *_year — суммы
-    за последний полный календарный год. Известные продукты берутся из CSV
-    (реальные тоталы РФ), остальные — синтетика по 48 месяцам. Выбор устройства
-    масштабирует объёмы (на «Все устройства» тоталы совпадают с выгрузкой).
+    за последний полный календарный год.
+
+    Рабочий режим (есть ключ API): обе истории берутся из Wordstat API за
+    48 месяцев, срез по устройствам делает сам API. Демо: известные продукты —
+    из CSV, остальные — синтетика; устройства масштабируются множителями.
     """
-    mf, of = _device_factors(devices)
     ds_key = dataset.lookup(phrase) if client.demo_mode else None
     if ds_key:
+        mf, of = _device_factors(devices)
         product = dataset.product(ds_key)
         h = dataset.history(ds_key)
         keys, labels = h["keys"], h["labels"]
-        raw_market, raw_otp = h["market"], h["otp"]
+        market = [int(round(v * mf)) for v in h["market"]]
+        otp = [int(round(v * of)) for v in h["otp"]]
         key, base, otp_name = ds_key, product["base"], product["otpName"]
     else:
         otp_phrase = phrase + " ОТП"
         win = last_n_months(48)
         keys, labels = win["keys"], win["labels"]
-        raw_market = client.monthly_history(phrase, keys)
-        raw_otp = client.monthly_history(otp_phrase, keys)
+        if client.demo_mode:
+            mf, of = _device_factors(devices)
+            market = [int(round(v * mf)) for v in client.monthly_history(phrase, keys)]
+            otp = [int(round(v * of)) for v in client.monthly_history(otp_phrase, keys)]
+        else:
+            dv = _api_devices(devices)
+            market = client.monthly_history(phrase, keys, devices=dv)
+            otp = client.monthly_history(otp_phrase, keys, devices=dv)
         key, base, otp_name = phrase, phrase, otp_phrase
 
-    market = [int(round(v * mf)) for v in raw_market]
-    otp = [int(round(v * of)) for v in raw_otp]
     hist = {"keys": keys, "labels": labels, "market": market, "otp": otp}
     year, my, oy = dataset.year_totals_from_series(keys, market, otp)
     return key, base, otp_name, hist, year, my, oy
+
+
+def _brand_otp_series(client, hist):
+    """Брендовый спрос «ОТП Банк» по месяцам hist["keys"] (для SoS-блока)."""
+    if client.demo_mode:
+        return dataset.otp_brand_series()
+    try:
+        return client.monthly_history("ОТП Банк", hist["keys"])
+    except YandexError:
+        return []
+
+
+def _live_subjects(client, phrase, devices, index):
+    """Реальные веса субъектов РФ: распределение фразы по регионам из API.
+
+    Возвращает None при ошибке API или пустом распределении — тогда
+    вызывающий код откатывается на модельные веса.
+    """
+    try:
+        resp = client.get_regions_distribution(phrase, devices=_api_devices(devices))
+    except YandexError:
+        return None
+    counts = {}
+    for r in resp.get("results") or []:
+        rid = str(r.get("region"))
+        if rid in index["subjects"]:
+            counts[rid] = counts.get(rid, 0) + _safe_int(r.get("count"))
+    total = sum(counts.values())
+    if not total:
+        return None
+    return [{"id": sid, "name": name, "weight": counts.get(sid, 0) / total}
+            for sid, name in index["subjects"].items()]
 
 
 def _merge_regions(market_regions, otp_regions):
