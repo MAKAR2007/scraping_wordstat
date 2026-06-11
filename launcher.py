@@ -22,6 +22,14 @@ import time
 import urllib.request
 import webbrowser
 
+# В windowed-сборке PyInstaller stdout/stderr могут быть None — Flask/werkzeug
+# падают при логировании. Подменяем на devnull.
+if getattr(sys, "frozen", False):
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
 
 def _bundle_dir():
     return getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -91,7 +99,18 @@ def _wait_ready(timeout=20):
 
 
 def _dialog(mode_text):
-    """Нативное окно macOS; держит процесс, пока пользователь не выйдет."""
+    """Управляющее окно: держит процесс, «Остановить» — выход (и смерть сервера)."""
+    if sys.platform == "darwin":
+        _dialog_mac(mode_text)
+    elif os.name == "nt":
+        _dialog_windows(mode_text)
+    else:
+        while True:
+            time.sleep(3600)
+
+
+def _dialog_mac(mode_text):
+    """Нативный диалог macOS через osascript (без зависимостей)."""
     script = (
         'display dialog "Дашборд запущен:\\n%s\\n\\n%s\\n\\n'
         '«Остановить» — завершить работу сервера." '
@@ -114,6 +133,44 @@ def _dialog(mode_text):
         if "Остановить" in out or res.returncode != 0:
             return        # «Остановить», Esc или закрытие диалога — выходим.
         # gave up:true (сутки прошли) — просто показываем диалог снова.
+
+
+def _dialog_windows(mode_text):
+    """Окно tkinter (в python.org-сборках Windows есть всегда); запасной
+    вариант — нативный MessageBox через ctypes."""
+    try:
+        import tkinter as tk
+    except Exception:
+        return _dialog_windows_msgbox(mode_text)
+    root = tk.Tk()
+    root.title("Аналитика Wordstat · ОТП")
+    root.geometry("470x220")
+    root.resizable(False, False)
+    tk.Label(root, text="Дашборд запущен", font=("Segoe UI", 14, "bold")).pack(pady=(16, 2))
+    link = tk.Label(root, text=URL, fg="#1a73e8", cursor="hand2", font=("Segoe UI", 11))
+    link.pack()
+    link.bind("<Button-1>", lambda e: webbrowser.open(URL))
+    tk.Label(root, text=mode_text, wraplength=430, font=("Segoe UI", 10)).pack(pady=(4, 10))
+    tk.Button(root, text="Открыть в браузере", width=26,
+              command=lambda: webbrowser.open(URL)).pack(pady=2)
+    tk.Button(root, text="Остановить и выйти", width=26, command=root.destroy).pack(pady=2)
+    tk.Label(root, text="Закройте это окно, чтобы остановить сервер.",
+             fg="#777", font=("Segoe UI", 9)).pack(pady=(8, 0))
+    root.mainloop()
+
+
+def _dialog_windows_msgbox(mode_text):
+    import ctypes
+    MB_OKCANCEL, IDOK = 0x00000001, 1
+    text = ("Дашборд запущен:\n%s\n\n%s\n\n"
+            "OK — открыть в браузере ещё раз.\n"
+            "Отмена — остановить сервер и выйти.") % (URL, mode_text)
+    while True:
+        res = ctypes.windll.user32.MessageBoxW(0, text, "Аналитика Wordstat · ОТП", MB_OKCANCEL)
+        if res == IDOK:
+            webbrowser.open(URL)
+            continue
+        return
 
 
 def main():
