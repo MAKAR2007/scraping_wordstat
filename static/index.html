@@ -28,20 +28,17 @@
     <section class="panel search">
       <form id="searchForm">
         <div class="field field--grow">
-          <label for="phrase">Ключевая фраза (рынок)</label>
+          <label for="phrase">Ключевая фраза</label>
           <input id="phrase" type="text" placeholder="например, Дебетовые карты" autocomplete="off" required>
         </div>
         <div class="field">
-          <label for="rangeFrom">Анализ с</label>
-          <input id="rangeFrom" type="month" title="Начало периода анализа">
-        </div>
-        <div class="field">
-          <label for="rangeTo">по</label>
-          <input id="rangeTo" type="month" title="Конец периода анализа">
-        </div>
-        <div class="field">
-          <label>&nbsp;</label>
-          <button type="button" id="rangeAllBtn" class="btn btn--ghost" title="Сбросить даты и анализировать всю историю">Весь период</button>
+          <label for="rangeFrom">Период анализа</label>
+          <div class="range-group">
+            <input id="rangeFrom" type="month" title="Начало периода анализа">
+            <span class="range-dash">—</span>
+            <input id="rangeTo" type="month" title="Конец периода анализа">
+            <button type="button" id="rangeAllBtn" class="range-all" title="Сбросить даты: вся история">Весь период</button>
+          </div>
         </div>
         <div class="field">
           <label for="device">Устройства</label>
@@ -60,10 +57,11 @@
             <option value="year" selected>По годам</option>
           </select>
         </div>
-        <button type="submit" id="searchBtn" class="btn btn--primary">Анализировать</button>
+        <div class="field">
+          <label>&nbsp;</label>
+          <button type="submit" id="searchBtn" class="btn btn--primary">Анализировать</button>
+        </div>
       </form>
-      <p class="hint">«Рынок» — частота вашей фразы. «ОТП» — та же фраза со словом <b>ОТП</b>;
-        доля ОТП = ОТП ÷ рынок. Разбивка строго по субъектам РФ, федеральные округа исключены.</p>
     </section>
 
     <div id="error" class="error hidden"></div>
@@ -115,7 +113,6 @@
           </div>
         </div>
         <div id="excludeChips" class="chips hidden"></div>
-        <p class="chart-note chart-note--hint">Исключённые регионы убираются из распределения, матрицы возможностей и агрегатной динамики.</p>
         <div class="chart-box chart-box--tall"><canvas id="regionsChart"></canvas></div>
       </section>
 
@@ -143,7 +140,7 @@
 
       <section class="panel">
         <h2>Доля ОТП во времени и прогноз</h2>
-        <p class="chart-note">Факт + сглаживание Хольта (демпфированный тренд) на 6 мес. · 3 сценария: оптимистичный / базовый / пессимистичный</p>
+        <p class="chart-note">Факт и прогноз на 6 месяцев · сценарии: оптимистичный / базовый / пессимистичный</p>
         <div class="chart-box"><canvas id="forecastChart"></canvas></div>
       </section>
 
@@ -151,7 +148,7 @@
         <div class="panel-head">
           <div>
             <h2>Матрица возможностей по регионам</h2>
-            <p class="chart-note" id="opportunityNote">Количество запросов (рынок) × проникновение ОТП. Размер точки — объём ОТП. <b>Клик по точке исключает регион.</b></p>
+            <p class="chart-note" id="opportunityNote">Размер точки — объём ОТП · <b>клик по точке исключает регион</b></p>
           </div>
         </div>
         <div class="matrix-legend">
@@ -196,7 +193,7 @@
           </section>
           <section class="panel">
             <h2>Доля голоса ОТП среди банков (SoS)</h2>
-            <p class="chart-note">Какая часть всех брендовых запросов пяти банков (ОТП + Сбер + Т‑Банк + Альфа + ВТБ) приходится на ОТП. Линия растёт — бренд набирает узнаваемость относительно конкурентов.</p>
+            <p class="chart-note">Доля ОТП в брендовых запросах пяти банков · рост линии — бренд укрепляется</p>
             <div class="chart-box"><canvas id="sosChart"></canvas></div>
           </section>
         </div>
@@ -208,22 +205,22 @@
         <div class="stat-card stat-card--market">
           <span class="stat-label">Доля «лидов» (намерение купить)</span>
           <span id="kpiIntent" class="stat-value">—</span>
-          <span class="stat-foot">Запросы вида «оформить, заказать, условия, тарифы, кэшбэк». Чем выше — тем больше новых клиентов.</span>
+          <span class="stat-foot">«оформить, заказать, условия, кэшбэк» — новые клиенты</span>
         </div>
         <div class="stat-card stat-card--slate">
           <span class="stat-label">Доля сервисных запросов</span>
           <span id="kpiService" class="stat-value">—</span>
-          <span class="stat-foot">Запросы вида «войти, личный кабинет, приложение, активировать». Это действующие клиенты, а не новые.</span>
+          <span class="stat-foot">«войти, личный кабинет, приложение» — действующие клиенты</span>
         </div>
         <div class="stat-card stat-card--risk">
           <span class="stat-label">Доля токсичных запросов</span>
           <span id="kpiChurn" class="stat-value">—</span>
-          <span class="stat-foot">Запросы вида «закрыть, заблокировали, мошенники, обман, отзывы». Сигнал оттока и репутационных рисков.</span>
+          <span class="stat-foot">«закрыть, заблокировали, обман, отзывы» — риск оттока</span>
         </div>
         <div class="stat-card stat-card--accent">
           <span class="stat-label">Индекс сезонности запросов</span>
           <span id="kpiSeason" class="stat-value">—</span>
-          <span class="stat-foot" id="kpiSeasonFoot">Во сколько раз пиковый месяц выше среднемесячного числа запросов ОТП.</span>
+          <span class="stat-foot" id="kpiSeasonFoot">пиковый месяц к среднемесячному объёму запросов ОТП</span>
         </div>
       </section>
       <div class="grid-2">
@@ -234,7 +231,7 @@
         </section>
         <section class="panel">
           <h2>Mobile-доля запросов · ОТП против рынка</h2>
-          <p class="chart-note">Доля мобильных запросов, % — индекс технологичности аудитории бренда</p>
+          <p class="chart-note">Доля мобильных запросов, %</p>
           <div class="chart-box"><canvas id="mobileChart"></canvas></div>
         </section>
       </div>
@@ -257,7 +254,7 @@
         <div class="panel-head">
           <div>
             <h2>Количество запросов и ключевая ставка ЦБ РФ</h2>
-            <p class="chart-note">Месячные запросы рынка (левая ось) против ключевой ставки, % годовых (правая ось, пунктир). Видно реакцию спроса на циклы денежно-кредитной политики.</p>
+            <p class="chart-note">Запросы рынка (левая ось) и ключевая ставка ЦБ, % (правая ось, пунктир)</p>
           </div>
         </div>
         <div class="chart-box"><canvas id="keyRateChart"></canvas></div>
@@ -288,7 +285,7 @@
         <div class="panel-head">
           <div>
             <h2>Таблица регионов · потенциал роста</h2>
-            <p class="chart-note">Сортировка по <b>Value Pool</b> — упущенной выгоде: количество запросов рынка × (целевая доля ОТП − текущая). Целевая доля = 75-й перцентиль по регионам.</p>
+            <p class="chart-note">Сортировка по <b>Value Pool</b> — упущенной выгоде региона (запросы рынка × разрыв доли ОТП до целевой)</p>
           </div>
           <input id="tableFilter" type="text" class="filter" placeholder="Фильтр по названию…">
         </div>
