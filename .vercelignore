@@ -1,0 +1,12 @@
+# не тащим в деплой тяжёлое и локальное
+.venv
+venv
+build
+dist
+__pycache__
+*.spec
+launcher.py
+.github
+.env
+.env.*
+*.zip

@@ -1,0 +1,44 @@
+# Сборка Windows-приложения (PyInstaller не кросс-компилирует, поэтому
+# собираем на windows-раннере). Артефакт: dist/WordstatAnalytics.exe.
+# Ключ API в сборку НЕ зашивается — кладётся файлом .env рядом с exe.
+name: build-windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/otp-dashboard]
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install flask openpyxl pyinstaller
+
+      - name: Build exe
+        run: >
+          pyinstaller --noconfirm --clean --onefile --windowed
+          --name WordstatAnalytics
+          --add-data "static;static"
+          --add-data "data;data"
+          launcher.py
+
+      - name: Smoke test exe (demo mode, headless)
+        shell: pwsh
+        run: |
+          $env:WORDSTAT_SMOKE = "1"
+          $p = Start-Process -FilePath "dist\WordstatAnalytics.exe" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "smoke test failed, exit code $($p.ExitCode)" }
+          Write-Host "smoke OK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WordstatAnalytics-win64
+          path: dist/WordstatAnalytics.exe
+          if-no-files-found: error
