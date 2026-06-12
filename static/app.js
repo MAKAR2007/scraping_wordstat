@@ -1,17 +1,22 @@
 "use strict";
 
-// hist — полная месячная история по всем регионам РФ; regions считаются на
-// клиенте под выбранный период (поэтому меняются и цифры, и лидеры).
+// fullHist — полная месячная история; hist — срез по выбранному диапазону
+// дат (rangeFrom..rangeTo). Все графики и KPI считаются от hist.
 let state = {
   marketPhrase: "", otpPhrase: "", year: null,
   subjects: [], hist: { keys: [], labels: [], market: [], otp: [] },
+  fullHist: { keys: [], labels: [], market: [], otp: [] },
   regions: [], dynRegion: "ALL", bucketLabel: "", competitors: [],
-  source: "", queryPhrase: "", knownPhrases: [], brandOtp: [], mobile: null,
+  source: "", queryPhrase: "", knownPhrases: [],
+  brandOtp: [], brandOtpFull: [], mobile: null, mobileFull: null,
 };
 let charts = {};
 let topLimit = 15;
 let excluded = new Set();   // id субъектов, исключённых из части графиков
-let heatmapMetric = "market";
+let regionRank = "market";  // ранжирование распределения: market | penetration
+let pieMetric = "otp";      // пайчарт: otp | market
+let seasonMetric = "market";// сезонность: market | otp
+let growthStart = 0;        // индекс стартовой точки темпа роста (=100)
 
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => Math.round(n || 0).toLocaleString("ru-RU");
@@ -30,8 +35,8 @@ const YEAR_COLORS = ["#3D7BF0", "#21A36B", "#FF7A1A", "#E8467C", "#6C4CF1", "#F5
 const CAT_COLORS = ["#6C4CF1", "#7AB829", "#FF7A1A", "#22B8CF", "#E8467C",
   "#F5B301", "#2F9E6E", "#9B5DE5", "#3D7BF0", "#FF6B6B", "#12B886", "#FA5252",
   "#4C6EF5", "#BE4BDB", "#FD7E14"];
-// Фирменные цвета банков (для конкурентных графиков).
-const BRAND_COLORS = { "ОТП": "#7AB829", "Альфа": "#EF3124", "Т-Банк": "#2B2D33",
+// Фирменные цвета банков (для конкурентных графиков). Т-Банк — фирменный жёлтый.
+const BRAND_COLORS = { "ОТП": "#7AB829", "Альфа": "#EF3124", "Т-Банк": "#F5C400",
   "Сбер": "#21A038", "ВТБ": "#00AEEF", "Райффайзен": "#E8A200" };
 const brandColor = (b) => BRAND_COLORS[b] || CAT_COLORS[(hashStr(b) % CAT_COLORS.length)];
 const MONTH_ABBR = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
@@ -71,6 +76,9 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("device").addEventListener("change", () => { if (state.marketPhrase) $("searchForm").requestSubmit(); });
   $("period").addEventListener("change", () => { if (state.marketPhrase) onPeriodChange(); });
+  $("rangeFrom").addEventListener("change", () => { if (state.fullHist.keys.length) applyRange(); });
+  $("rangeTo").addEventListener("change", () => { if (state.fullHist.keys.length) applyRange(); });
+  $("growthStart").addEventListener("change", () => { growthStart = parseInt($("growthStart").value, 10) || 0; renderGrowthIndexChart(); });
   document.querySelectorAll(".toggle-btn[data-top]").forEach((b) => {
     b.addEventListener("click", () => {
       document.querySelectorAll(".toggle-btn[data-top]").forEach((x) => x.classList.remove("active"));
@@ -79,15 +87,49 @@ document.addEventListener("DOMContentLoaded", () => {
       renderRegionsChart();
     });
   });
-  document.querySelectorAll("#heatmapToggle .toggle-btn").forEach((b) => {
-    b.addEventListener("click", () => {
-      document.querySelectorAll("#heatmapToggle .toggle-btn").forEach((x) => x.classList.remove("active"));
-      b.classList.add("active");
-      heatmapMetric = b.dataset.metric;
-      renderHeatmap();
+  // Общий обработчик тумблеров с data-metric/data-rank.
+  const bindToggle = (boxId, fn) => {
+    document.querySelectorAll("#" + boxId + " .toggle-btn").forEach((b) => {
+      b.addEventListener("click", () => {
+        document.querySelectorAll("#" + boxId + " .toggle-btn").forEach((x) => x.classList.remove("active"));
+        b.classList.add("active");
+        fn(b.dataset);
+      });
     });
-  });
+  };
+  bindToggle("rankToggle", (d) => { regionRank = d.rank; renderRegionsChart(); });
+  bindToggle("pieToggle", (d) => { pieMetric = d.metric; renderShareChart(); });
+  bindToggle("seasonToggle", (d) => { seasonMetric = d.metric; renderSeasonalityChart(); });
 });
+
+// ------------------------------------------- диапазон дат (с .. по) -------
+function setupRangeInputs() {
+  const keys = state.fullHist.keys;
+  if (!keys.length) return;
+  const lo = keys[0], hi = keys[keys.length - 1];
+  ["rangeFrom", "rangeTo"].forEach((id) => { $(id).min = lo; $(id).max = hi; });
+  const clamp = (v) => (v && v >= lo && v <= hi ? v : "");
+  $("rangeFrom").value = clamp($("rangeFrom").value);
+  $("rangeTo").value = clamp($("rangeTo").value);
+}
+
+function applyRange(render = true) {
+  const keys = state.fullHist.keys;
+  let from = $("rangeFrom").value || keys[0];
+  let to = $("rangeTo").value || keys[keys.length - 1];
+  if (from > to) { const t = from; from = to; to = t; }
+  const i0 = Math.max(0, keys.findIndex((k) => k >= from));
+  let i1 = keys.length - 1;
+  for (let i = keys.length - 1; i >= 0; i--) { if (keys[i] <= to) { i1 = i; break; } }
+  const sl = (a) => (a || []).slice(i0, i1 + 1);
+  state.hist = { keys: sl(keys), labels: sl(state.fullHist.labels),
+                 market: sl(state.fullHist.market), otp: sl(state.fullHist.otp) };
+  state.brandOtp = sl(state.brandOtpFull);
+  state.mobile = state.mobileFull
+    ? { market: sl(state.mobileFull.market), otp: sl(state.mobileFull.otp) } : null;
+  growthStart = 0;
+  if (render) renderAll();
+}
 
 async function onSearch(e) {
   e.preventDefault();
@@ -109,14 +151,16 @@ async function onSearch(e) {
     state.year = data.year;
     state.subjects = data.subjects || [];
     state.competitors = data.competitors || [];
-    state.hist = data.dynamics || { keys: [], labels: [], market: [], otp: [] };
+    state.fullHist = data.dynamics || { keys: [], labels: [], market: [], otp: [] };
     state.source = data.source || "";
     state.queryPhrase = data.queryPhrase || "";
     state.knownPhrases = data.knownPhrases || [];
-    state.brandOtp = data.brandOtp || [];
-    state.mobile = data.mobile || null;
+    state.brandOtpFull = data.brandOtp || [];
+    state.mobileFull = data.mobile || null;
     state.dynRegion = "ALL";
     excluded.clear();
+    setupRangeInputs();
+    applyRange(false);          // hist = срез fullHist по выбранным датам
     renderBanner();
     populateRegionSelect();
     renderExcludeChips();
@@ -149,13 +193,8 @@ function renderAll() {
   $("exportBtn").disabled = false;
   recomputeRegions();
   renderKpi();
-  renderLeaders();
-  renderStrategicKpis();
   renderPeriodViews();
-  renderSeasonalityChart("market", "seasonalityChart", "seasonality");
-  renderSeasonalityChart("otp", "seasonalityOtpChart", "seasonalityOtp");
-  renderHeatmap();
-  renderBrandSection();
+  renderSeasonalityChart();
   renderQualityKpis();
   renderIntentChart();
   renderMobileChart();
@@ -165,29 +204,24 @@ function renderAll() {
 function onPeriodChange() {
   recomputeRegions();
   renderKpi();
-  renderLeaders();
-  renderStrategicKpis();
   renderPeriodViews();
 }
 
-// Всё, что зависит от выбранного периода (бакет регионов + графики периода).
+// Всё, что зависит от гранулярности (бакет регионов + графики периода).
 function renderPeriodViews() {
   renderRegionsChart();
   renderDynamicsChart();
-  renderPenetrationChart();
   renderGrowthIndexChart();
   renderForecastChart();
-  renderDistChart();
   renderPenByRegionChart();
   renderOpportunityChart();
-  renderShareChart("shareOtp", "otp");
-  renderShareChart("shareMarket", "market");
+  renderShareChart();
+  renderBrandSection();
   renderRegionsTable();
 }
 
 // ---------------------------------------------- агрегация и текущий бакет --
 function periodKey() { return $("period").value || "year"; }
-function periodUnit() { const p = periodKey(); return p === "year" ? "год" : p === "quarter" ? "квартал" : "месяц"; }
 
 function aggregate(hist, period) {
   if (period === "month") {
@@ -315,19 +349,6 @@ function currentDynHist() {
 }
 
 // --------------------------------------------------------------- KPI ряды --
-function renderLeaders() {
-  $("statLeader").textContent = state.regions[0] ? state.regions[0].name : "—";
-  const lo = state.regions.reduce((a, b) => (!a || b.otp > a.otp ? b : a), null);
-  $("statLeaderOtp").textContent = lo ? lo.name : "—";
-  // Снизу — лидер по рыночной доле ОТП (макс. проникновение среди значимых
-  // регионов, чтобы малые регионы с шумной долей не вылезали).
-  const pool = state.regions.filter((r) => r.market > 0).slice(0, 40);
-  const lp = pool.reduce((a, b) => (!a || b.penetration > a.penetration ? b : a), null);
-  $("statLeaderOtpFoot").textContent = lp
-    ? "макс. доля ОТП: " + lp.name + " · " + fmtPct(lp.penetration)
-    : "регион №1 по спросу ОТП";
-}
-
 function renderKpi() {
   const b = currentBucket();
   const market = b.M, otp = b.O, share = market ? otp / market * 100 : 0;
@@ -347,62 +368,16 @@ function renderKpi() {
     el.textContent = signPct(pct); el.className = "stat-value " + (pct >= 0 ? "growth-up" : "growth-down");
     foot.textContent = b.agg.labels[i2] + " к " + b.agg.labels[i1];
   });
-
-  const peak = (field) => {
-    let hi = -1, hidx = -1;
-    b.full.forEach((i) => { if (b.agg[field][i] > hi) { hi = b.agg[field][i]; hidx = i; } });
-    return { label: hidx >= 0 ? b.agg.labels[hidx] : "—", val: hi > 0 ? hi : 0, idx: hidx };
-  };
-  const unit = periodUnit(), pm = peak("market"), po = peak("otp");
-  $("peakMarket").textContent = fmt(pm.val);
-  $("peakMarketFoot").textContent = "максимум · " + pm.label;
-  const poShare = (po.idx >= 0 && b.agg.market[po.idx]) ? b.agg.otp[po.idx] / b.agg.market[po.idx] * 100 : 0;
-  $("peakOtp").textContent = fmt(po.val);
-  $("peakOtpFoot").textContent = "максимум · " + po.label + " · доля рынка " + poShare.toFixed(2).replace(".", ",") + "%";
-}
-
-function renderStrategicKpis() {
-  // CAGR выносим в подпись к динамике частоты (а не отдельными цифрами).
-  const ya = aggregate(state.hist, "year");
-  const full = [];
-  for (let i = 0; i < ya.counts.length; i++) if (ya.counts[i] >= 12) full.push(i);
-  const cagr = (arr) => {
-    if (full.length < 2) return null;
-    const a = arr[full[0]], b = arr[full[full.length - 1]], yrs = full.length - 1;
-    if (a <= 0 || yrs <= 0) return null;
-    return (Math.pow(b / a, 1 / yrs) - 1) * 100;
-  };
-  const cm = cagr(ya.market), co = cagr(ya.otp);
-  const setBadge = (id, v) => {
-    const el = $(id);
-    if (v == null) { el.textContent = "—"; el.className = "cagr-badge"; return; }
-    el.textContent = signPct(v); el.className = "cagr-badge " + (v >= 0 ? "is-up" : "is-down");
-  };
-  setBadge("cagrMarket", cm); setBadge("cagrOtp", co);
-
-  // Концентрация спроса (реактивна к устройству через веса).
-  const pctTxt = (v) => v.toFixed(1).replace(".", ",") + "%";
-  const sm = [...state.regions].sort((a, b) => b.market - a.market);
-  const totM = sm.reduce((a, r) => a + r.market, 0) || 1;
-  const top5m = sm.slice(0, 5).reduce((a, r) => a + r.market, 0);
-  const so = [...state.regions].sort((a, b) => b.otp - a.otp);
-  const totO = so.reduce((a, r) => a + r.otp, 0) || 1;
-  const top5o = so.slice(0, 5).reduce((a, r) => a + r.otp, 0);
-  const hhi = Math.round(sm.reduce((a, r) => a + Math.pow(r.market / totM * 100, 2), 0));
-  let acc = 0, breadth = 0;
-  for (const r of sm) { acc += r.market; breadth++; if (acc >= totM * 0.8) break; }
-
-  $("kpiConcMarket").textContent = pctTxt(top5m / totM * 100);
-  $("kpiConcOtp").textContent = pctTxt(top5o / totO * 100);
-  $("kpiHhi").textContent = hhi.toLocaleString("ru-RU");
-  $("kpiBreadth").textContent = breadth + " регионов";
 }
 
 // ----------------------------------------------------- регионы: рынок+ОТП --
 function destroy(name) { if (charts[name]) { charts[name].destroy(); charts[name] = null; } }
 
 function renderRegionsChart() {
-  const rows = visibleRegions().slice(0, topLimit);
+  // Ранжирование: по числу запросов (рынок) или по доле ОТП (проникновению).
+  const sorted = [...visibleRegions()].sort((a, b) =>
+    regionRank === "penetration" ? b.penetration - a.penetration : b.market - a.market);
+  const rows = sorted.slice(0, topLimit);
   $("regionsChart").parentElement.style.height = Math.max(420, rows.length * 27) + "px";
   destroy("regions");
   charts.regions = new Chart($("regionsChart"), {
@@ -469,32 +444,34 @@ function renderDynamicsChart() {
   });
 }
 
-function renderPenetrationChart() {
-  const agg = aggregate(state.hist, periodKey());
-  const share = agg.market.map((m, i) => (m ? agg.otp[i] / m * 100 : 0));
-  destroy("penetration");
-  charts.penetration = new Chart($("penetrationChart"), {
-    type: "line",
-    data: { labels: agg.labels, datasets: [{ label: "Доля ОТП, %", data: share, borderColor: C.otp, backgroundColor: C.otpSoft, fill: true, tension: .35, pointRadius: 0, borderWidth: 2.5 }] },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => " доля ОТП: " + c.parsed.y.toFixed(3).replace(".", ",") + "%" } } },
-      scales: { x: { ticks: { maxRotation: 50, minRotation: 45, autoSkip: true, font: { size: 10 } } }, y: { ticks: { callback: (v) => v.toFixed(1).replace(".", ",") + "%" } } },
-    },
-  });
-}
-
 function renderGrowthIndexChart() {
   const agg = aggregate(state.hist, periodKey());
-  const i0m = agg.market.findIndex((v) => v > 0), i0o = agg.otp.findIndex((v) => v > 0);
-  const bM = i0m >= 0 ? agg.market[i0m] : 0, bO = i0o >= 0 ? agg.otp[i0o] : 0;
-  const idxM = agg.market.map((v) => (bM ? v / bM * 100 : null));
-  const idxO = agg.otp.map((v) => (bO ? v / bO * 100 : null));
+
+  // Селект стартовой точки (=100): заполняем подписями текущей агрегации.
+  const sel = $("growthStart");
+  if (sel.options.length !== agg.labels.length ||
+      (sel.options[0] && sel.options[0].textContent !== "Старт: " + agg.labels[0])) {
+    sel.innerHTML = "";
+    agg.labels.forEach((lab, i) => {
+      const o = document.createElement("option");
+      o.value = i; o.textContent = "Старт: " + lab;
+      sel.appendChild(o);
+    });
+  }
+  if (growthStart >= agg.labels.length) growthStart = 0;
+  sel.value = String(growthStart);
+
+  const s = growthStart;
+  const labels = agg.labels.slice(s);
+  const mSeries = agg.market.slice(s), oSeries = agg.otp.slice(s);
+  const bM = mSeries.find((v) => v > 0) || 0, bO = oSeries.find((v) => v > 0) || 0;
+  const idxM = mSeries.map((v) => (bM ? v / bM * 100 : null));
+  const idxO = oSeries.map((v) => (bO ? v / bO * 100 : null));
   destroy("growthIndex");
   charts.growthIndex = new Chart($("growthIndexChart"), {
     type: "line",
     data: {
-      labels: agg.labels,
+      labels,
       datasets: [
         { label: "Рынок", data: idxM, borderColor: C.market, backgroundColor: "transparent", tension: .35, pointRadius: 0, borderWidth: 2.5, spanGaps: true },
         { label: "ОТП", data: idxO, borderColor: C.otp, backgroundColor: "transparent", tension: .35, pointRadius: 0, borderWidth: 2.5, spanGaps: true },
@@ -591,20 +568,6 @@ function renderForecastChart() {
   });
 }
 
-function renderDistChart() {
-  const { labels, data } = buildHistogram(visibleRegions().map((r) => r.market));
-  destroy("dist");
-  charts.dist = new Chart($("distChart"), {
-    type: "bar",
-    data: { labels, datasets: [{ label: "Регионов", data, backgroundColor: C.orange, borderRadius: 5 }] },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => c.parsed.y + " регион(ов)" } } },
-      scales: { x: { ticks: { font: { size: 10 } }, grid: { display: false } }, y: { beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: "число регионов" } } },
-    },
-  });
-}
-
 function renderPenByRegionChart() {
   const rows = [...state.regions].filter((r) => r.market > 0).sort((a, b) => b.penetration - a.penetration).slice(0, 15);
   destroy("penByRegion");
@@ -621,7 +584,8 @@ function renderPenByRegionChart() {
   });
 }
 
-function renderSeasonalityChart(metric, canvasId, chartKey) {
+function renderSeasonalityChart() {
+  const metric = seasonMetric, canvasId = "seasonalityChart", chartKey = "seasonality";
   const h = state.hist, years = {};
   h.keys.forEach((k, i) => { const y = k.slice(0, 4), m = parseInt(k.slice(5, 7), 10) - 1; (years[y] = years[y] || new Array(12).fill(null))[m] = h[metric][i]; });
   const recent = Object.keys(years).sort().slice(-6);
@@ -648,11 +612,13 @@ function renderOpportunityChart() {
   const totM = regs.reduce((a, r) => a + r.market, 0), totO = regs.reduce((a, r) => a + r.otp, 0);
   const medY = totM ? totO / totM * 100 : 0;
   const maxO = Math.max(...regs.map((r) => r.otp), 1);
+  // Три кластера: «приоритет роста» (большой рынок, низкая доля), «сильные
+  // позиции» (доля выше медианы — бывшие зелёный и фиолетовый объединены)
+  // и «фоновые» (малый рынок, низкая доля).
   const pts = regs.map((r) => {
-    const opp = r.market >= medX && r.penetration < medY;
-    const lead = r.market >= medX && r.penetration >= medY;
-    const niche = r.market < medX && r.penetration >= medY;
-    const color = opp ? C.orange : lead ? C.market : niche ? C.otp : "#AEB6C4";
+    const growth = r.market >= medX && r.penetration < medY;
+    const strong = r.penetration >= medY;
+    const color = growth ? C.orange : strong ? "#21A36B" : "#AEB6C4";
     return { x: r.market, y: r.penetration, r: 5 + Math.sqrt(r.otp / maxO) * 16, name: r.name, id: r.id, otp: r.otp, color };
   });
   destroy("opportunity");
@@ -672,7 +638,7 @@ function renderOpportunityChart() {
         tooltip: { callbacks: { label: (c) => { const p = c.raw; return " " + p.name + ": рынок " + fmt(p.x) + ", доля ОТП " + p.y.toFixed(2).replace(".", ",") + "%, ОТП " + fmt(p.otp) + "  (клик — исключить)"; } } },
       },
       scales: {
-        x: { title: { display: true, text: "Спрос (рынок), показы" }, ticks: { callback: shortNum } },
+        x: { title: { display: true, text: "Количество запросов (рынок)" }, ticks: { callback: shortNum } },
         y: { title: { display: true, text: "Доля ОТП, %" }, ticks: { callback: (v) => v.toFixed(1).replace(".", ",") + "%" } },
       },
     },
@@ -680,8 +646,8 @@ function renderOpportunityChart() {
   });
 }
 
-function renderShareChart(name, key) {
-  const canvas = name === "shareOtp" ? "shareOtpChart" : "shareMarketChart";
+function renderShareChart() {
+  const name = "share", key = pieMetric, canvas = "shareChart";
   const sorted = [...state.regions].sort((a, b) => b[key] - a[key]);
   const top = sorted.slice(0, 10);
   const restSum = sorted.slice(10).reduce((s, r) => s + (r[key] || 0), 0);
@@ -763,59 +729,72 @@ function populateRegionSelect() {
 }
 
 // Исключение регионов влияет на: распределение по регионам, матрицу
-// возможностей, гистограмму спроса и агрегатную динамику частоты.
+// возможностей и агрегатную динамику частоты.
 function renderExclusionViews() {
   renderRegionsChart();
   renderOpportunityChart();
-  renderDistChart();
   renderDynamicsChart();
 }
 
+// Чипы исключённых регионов показываются в двух местах: под распределением
+// по регионам и под матрицей возможностей.
 function renderExcludeChips() {
-  const box = $("excludeChips");
-  box.innerHTML = "";
   const byId = Object.fromEntries(state.subjects.map((s) => [s.id, s.name]));
-  [...excluded].forEach((id) => {
-    const chip = document.createElement("button");
-    chip.type = "button"; chip.className = "chip";
-    chip.innerHTML = byId[id] + ' <span aria-hidden="true">×</span>';
-    chip.addEventListener("click", () => { excluded.delete(id); renderExcludeChips(); renderExclusionViews(); });
-    box.appendChild(chip);
+  ["excludeChips", "excludeChipsMatrix"].forEach((boxId) => {
+    const box = $(boxId);
+    if (!box) return;
+    box.innerHTML = "";
+    [...excluded].forEach((id) => {
+      const chip = document.createElement("button");
+      chip.type = "button"; chip.className = "chip";
+      chip.innerHTML = byId[id] + ' <span aria-hidden="true">×</span>';
+      chip.addEventListener("click", () => { excluded.delete(id); renderExcludeChips(); renderExclusionViews(); });
+      box.appendChild(chip);
+    });
+    box.classList.toggle("hidden", excluded.size === 0);
   });
-  box.classList.toggle("hidden", excluded.size === 0);
 }
 
 async function onExport() {
   const btn = $("exportBtn");
   btn.disabled = true; const label = btn.textContent; btn.textContent = "…";
-  // Снимок всего дашборда: KPI, выводы, динамика, регионы, конкуренты,
-  // прогноз и сезонность — бэкенд соберёт книгу из 6 листов.
+  // Снимок дашборда в текущем состоянии (с учётом диапазона дат и
+  // гранулярности): KPI, динамика, регионы с Value Pool, бренды банков,
+  // прогноз, сезонность и интенты.
   const b = currentBucket();
   const txt = (id) => $(id).textContent.trim();
   const kpi = {
     periodLabel: b.label, market: b.M, otp: b.O, share: b.M ? b.O / b.M * 100 : 0,
+    range: (state.hist.labels[0] || "") + " — " + (state.hist.labels[state.hist.labels.length - 1] || ""),
+    granularity: $("period").selectedOptions[0].textContent,
     growthMarket: txt("growthMarket") + " (" + txt("growthMarketFoot") + ")",
     growthOtp: txt("growthOtp") + " (" + txt("growthOtpFoot") + ")",
-    peakMarket: txt("peakMarket") + " — " + txt("peakMarketFoot"),
-    peakOtp: txt("peakOtp") + " — " + txt("peakOtpFoot"),
-    leader: txt("statLeader"), leaderOtp: txt("statLeaderOtp"),
-    cagrMarket: txt("cagrMarket"), cagrOtp: txt("cagrOtp"),
-    concMarket: txt("kpiConcMarket"), concOtp: txt("kpiConcOtp"),
-    hhi: txt("kpiHhi"), breadth: txt("kpiBreadth"),
+    sos: txt("sosValue"), sosDelta: txt("sosDelta") + " (" + txt("sosDeltaFoot") + ")",
+    sosWinner: txt("sosLeader") + " (" + txt("sosLeaderFoot") + ")",
+    brandOtp: txt("brandOtpVal") + " (" + txt("brandOtpFoot") + ")",
+    intentLeads: txt("kpiIntent"), intentService: txt("kpiService"),
+    intentToxic: txt("kpiChurn"), seasonIdx: txt("kpiSeason"),
   };
   const sm = seasonalityMatrix("market"), so = seasonalityMatrix("otp");
+  const spAbs = intentSplit().slice(-12);
+  const intents = {
+    labels: state.hist.labels.slice(-12),
+    rows: spAbs.map((t) => [t.commercial, t.service, t.toxic, t.other]),
+  };
   try {
     const resp = await fetch("/api/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         phrase: state.marketPhrase, otpPhrase: state.otpPhrase,
         kpi,
-        dynamics: state.hist, regions: state.regions,
-        // Брендовый спрос банков (как в SoS-блоке): ОТП — реальный ряд,
+        dynamics: state.hist,
+        regions: valuePoolData().rows,
+        // Брендовые запросы банков (как в SoS-блоке): ОТП — реальный ряд,
         // конкуренты — оценка; ряды выровнены по месяцам dynamics.
         competitors: (brandSeries() || []).map((r) => ({ brand: r.brand, series: r.series })),
         forecast: computeForecastData(),
         seasonality: { years: sm.years, months: MONTH_ABBR, market: sm.matrix, otp: so.matrix },
+        intents,
       }),
     });
     if (!resp.ok) throw new Error("Не удалось сформировать файл");
@@ -868,20 +847,49 @@ function renderBrandSection() {
   });
   const last = sos.length - 1;
   $("sosValue").textContent = sos[last].toFixed(2).replace(".", ",") + "%";
-  const d12 = sos.length > 12 ? sos[last] - sos[last - 12] : null;
-  const sd = $("sosDelta");
-  sd.textContent = d12 == null ? "—" : (d12 >= 0 ? "+" : "−") + Math.abs(d12).toFixed(2).replace(".", ",") + " п.п.";
-  sd.className = "stat-value " + (d12 != null ? (d12 >= 0 ? "growth-up" : "growth-down") : "");
 
-  const li = idx[idx.length - 1];
-  const vals = rows.map((r) => r.series[li] || 0);
-  const lead = rows[vals.indexOf(Math.max(...vals))];
-  $("sosLeader").textContent = lead.brand;
-  $("sosLeaderFoot").textContent = fmt(Math.max(...vals)) + " запросов/мес" + (lead.est ? " · оценка" : "");
-  const oLast = otpRow.series[li] || 0;
-  const oPrev = idx.length > 12 ? otpRow.series[idx[idx.length - 13]] || 0 : 0;
-  $("brandOtpVal").textContent = fmt(oLast);
-  $("brandOtpFoot").textContent = "за " + h.labels[li] + (oPrev ? " · " + signPct((oLast - oPrev) / oPrev * 100) + " г/г" : "");
+  // Окно сравнения = выбранная гранулярность: месяц / квартал / год.
+  const per = periodKey();
+  const win = per === "year" ? 12 : per === "quarter" ? 3 : 1;
+  const perLabel = per === "year" ? "за год" : per === "quarter" ? "за квартал" : "за месяц";
+  const perCmp = per === "year" ? "г/г" : per === "quarter" ? "кв/кв" : "м/м";
+
+  $("sosDeltaLabel").textContent = "SoS · изменение " + perLabel;
+  const dWin = sos.length > win ? sos[last] - sos[last - win] : null;
+  const sd = $("sosDelta");
+  sd.textContent = dWin == null ? "—" : (dWin >= 0 ? "+" : "−") + Math.abs(dWin).toFixed(2).replace(".", ",") + " п.п.";
+  sd.className = "stat-value " + (dWin != null ? (dWin >= 0 ? "growth-up" : "growth-down") : "");
+  $("sosDeltaFoot").textContent = "прирост доли голоса " + perCmp + ", п.п.";
+
+  // Лидер роста SoS: банк с максимальным приростом доли голоса за период.
+  const sharesAt = (pos) => {
+    const i = idx[pos];
+    const sum = rows.reduce((a, r) => a + (r.series[i] || 0), 0) || 1;
+    return rows.map((r) => (r.series[i] || 0) / sum * 100);
+  };
+  if (idx.length > win) {
+    const nowS = sharesAt(idx.length - 1), prevS = sharesAt(idx.length - 1 - win);
+    const deltas = nowS.map((v, j) => v - prevS[j]);
+    let wi = 0; deltas.forEach((d, j) => { if (d > deltas[wi]) wi = j; });
+    $("sosLeader").textContent = rows[wi].brand;
+    $("sosLeaderFoot").textContent = "+" + deltas[wi].toFixed(2).replace(".", ",") + " п.п. SoS " + perLabel +
+      (rows[wi].est ? " · оценка" : "");
+  } else {
+    $("sosLeader").textContent = "—";
+    $("sosLeaderFoot").textContent = "недостаточно данных " + perLabel;
+  }
+
+  // Брендовые запросы ОТП: объём за окно периода + прирост к прошлому окну.
+  const winSum = (endPos) => {
+    let s = 0;
+    for (let k = 0; k < win; k++) { const p = endPos - k; if (p >= 0) s += otpRow.series[idx[p]] || 0; }
+    return s;
+  };
+  const oNow = winSum(idx.length - 1);
+  const oPrev = idx.length >= win * 2 ? winSum(idx.length - 1 - win) : 0;
+  $("brandOtpVal").textContent = fmt(oNow);
+  $("brandOtpFoot").textContent = (win === 1 ? "за " + h.labels[idx[idx.length - 1]] : perLabel + " (посл. " + win + " мес)") +
+    (oPrev ? " · " + signPct((oNow - oPrev) / oPrev * 100) + " " + perCmp : "");
 
   // Чистые деления лог-оси (1/2/5 ×10ⁿ) — иначе подписи наползают друг на друга.
   const LOG_TICKS = [100000, 200000, 500000, 1000000, 2000000, 5000000, 10000000, 20000000];
@@ -979,29 +987,61 @@ function renderQualityKpis() {
     : "Во сколько раз пиковый месяц выше среднемесячного спроса ОТП.";
 }
 
+// Подписи долей прямо на сегментах stacked-бара (без наведения).
+const stackLabelsPlugin = {
+  id: "stackLabels",
+  afterDatasetsDraw(chart) {
+    const { ctx } = chart;
+    ctx.save();
+    ctx.font = "700 10px Inter, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    chart.data.datasets.forEach((ds, di) => {
+      const meta = chart.getDatasetMeta(di);
+      if (meta.hidden) return;
+      meta.data.forEach((bar, i) => {
+        const v = ds.data[i];
+        if (v == null || !isFinite(bar.y) || Math.abs(bar.base - bar.y) < 14) return;
+        ctx.fillStyle = ds.lightText ? "#fff" : "#2C3240";
+        ctx.fillText(Math.round(v) + "%", bar.x, (bar.y + bar.base) / 2);
+      });
+    });
+    ctx.restore();
+  },
+};
+
 function renderIntentChart() {
-  const sp = intentSplit().slice(-12), labels = state.hist.labels.slice(-12);
-  const mk = (label, f, color) => ({ label, data: sp.map((x) => x[f]), backgroundColor: color, borderRadius: 3, stack: "s" });
+  const spAbs = intentSplit().slice(-12), labels = state.hist.labels.slice(-12);
+  // 100%-нормировка: каждый месяц = 100, сегменты — доли интентов.
+  const sp = spAbs.map((t) => {
+    const tot = t.commercial + t.service + t.toxic + t.other || 1;
+    return { commercial: t.commercial / tot * 100, service: t.service / tot * 100,
+             toxic: t.toxic / tot * 100, other: t.other / tot * 100, _abs: t, _tot: tot };
+  });
+  const mk = (label, f, color, lightText) => ({
+    label, data: sp.map((x) => x[f]), backgroundColor: color, borderRadius: 3, stack: "s", lightText,
+  });
   destroy("intent");
   charts.intent = new Chart($("intentChart"), {
     type: "bar",
     data: { labels, datasets: [
-      mk("Продуктовый (лиды)", "commercial", "#52AE30"),
-      mk("Сервисный", "service", "#3D7BF0"),
-      mk("Токсичный", "toxic", "#e23b2e"),
-      mk("Прочее", "other", "#C7CCD8"),
+      mk("Продуктовый (лиды)", "commercial", "#52AE30", true),
+      mk("Сервисный", "service", "#3D7BF0", true),
+      mk("Токсичный", "toxic", "#e23b2e", true),
+      mk("Прочее", "other", "#C7CCD8", false),
     ] },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { position: "top", labels: { boxWidth: 12, font: { weight: 700 } } },
         tooltip: { callbacks: { label: (c) => {
           const t = sp[c.dataIndex];
-          const total = t.commercial + t.service + t.toxic + t.other || 1;
-          return " " + c.dataset.label + ": " + fmt(c.parsed.y) + " (" + (c.parsed.y / total * 100).toFixed(0) + "%)";
+          const fld = ["commercial", "service", "toxic", "other"][c.datasetIndex];
+          return " " + c.dataset.label + ": " + c.parsed.y.toFixed(1).replace(".", ",") + "% (" + fmt(t._abs[fld]) + ")";
         } } } },
       scales: { x: { stacked: true, ticks: { maxRotation: 50, minRotation: 45, font: { size: 10 } } },
-        y: { stacked: true, ticks: { callback: shortNum } } },
+        y: { stacked: true, max: 100, ticks: { callback: (v) => v + "%" } } },
     },
+    plugins: [stackLabelsPlugin],
   });
 }
 
@@ -1108,77 +1148,10 @@ function seasonalityMatrix(metric) {
   return { years: ys, matrix: ys.map((y) => years[y]) };
 }
 
-// Термальная палитра: голубой (минимум) → зелёный → жёлтый → оранжевый →
-// красный (максимум). Шкала нормируется от минимума к максимуму ряда, чтобы
-// различия месяцев были видны, а не тонули в полупрозрачности одного цвета.
-const HEAT_STOPS = [
-  [0.00, [217, 237, 255]],
-  [0.25, [144, 210, 160]],
-  [0.50, [255, 221, 87]],
-  [0.75, [255, 142, 46]],
-  [1.00, [206, 32, 41]],
-];
-
-function heatColor(t) {
-  t = Math.max(0, Math.min(1, t));
-  for (let i = 1; i < HEAT_STOPS.length; i++) {
-    if (t <= HEAT_STOPS[i][0]) {
-      const [t0, c0] = HEAT_STOPS[i - 1], [t1, c1] = HEAT_STOPS[i];
-      const k = (t - t0) / (t1 - t0 || 1);
-      return "rgb(" + c0.map((v, j) => Math.round(v + (c1[j] - v) * k)).join(",") + ")";
-    }
-  }
-  return "rgb(206,32,41)";
-}
-
-function renderHeatmap() {
-  const { years, matrix } = seasonalityMatrix(heatmapMetric);
-  const flat = matrix.flat().filter((v) => v != null);
-  const max = Math.max(...flat, 1), min = Math.min(...flat, max);
-  const box = $("heatmap");
-  box.innerHTML = "";
-  const grid = document.createElement("div");
-  grid.className = "hm-grid";
-  grid.appendChild(hmCell("", "hm-head"));
-  MONTH_ABBR.forEach((m) => grid.appendChild(hmCell(m, "hm-head")));
-  years.forEach((y, yi) => {
-    grid.appendChild(hmCell(y, "hm-year"));
-    matrix[yi].forEach((v, mi) => {
-      const c = document.createElement("div");
-      c.className = "hm-cell";
-      if (v == null) {
-        c.classList.add("hm-empty");
-      } else {
-        const t = (v - min) / (max - min || 1);
-        c.style.background = heatColor(t);
-        if (t > 0.62) c.style.color = "#fff";
-        c.textContent = shortNum(v);
-        c.title = MONTH_ABBR[mi] + " " + y + ": " + fmt(v) + " запросов";
-      }
-      grid.appendChild(c);
-    });
-  });
-  box.appendChild(grid);
-}
-
-function hmCell(text, cls) {
-  const d = document.createElement("div");
-  d.className = cls;
-  d.textContent = text;
-  return d;
-}
-
 // --------------------------------------------------------------- helpers --
 function hexA(hex, a) {
   const n = parseInt(hex.slice(1), 16);
   return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")";
-}
-function linreg(y) {
-  const n = y.length; let sx = 0, sy = 0, sxx = 0, sxy = 0;
-  for (let i = 0; i < n; i++) { sx += i; sy += y[i]; sxx += i * i; sxy += i * y[i]; }
-  const d = n * sxx - sx * sx;
-  const slope = d ? (n * sxy - sx * sy) / d : 0;
-  return { slope, intercept: (sy - slope * sx) / n };
 }
 function nextMonthLabels(lastKey, k) {
   let y = parseInt(lastKey.slice(0, 4), 10), m = parseInt(lastKey.slice(5, 7), 10);
@@ -1191,24 +1164,6 @@ function shortNum(n) {
   if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace(".0", "") + " млн";
   if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1).replace(".0", "") + " тыс";
   return String(Math.round(n));
-}
-function niceStep(raw) {
-  if (raw <= 0) return 1;
-  const p = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / p;
-  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p;
-}
-function buildHistogram(counts) {
-  if (!counts.length) return { labels: [], data: [] };
-  // Робастный верх: 90-й перцентиль + overflow-бакет, чтобы выбросы (Москва)
-  // не «сплющивали» гистограмму влево.
-  const sorted = [...counts].sort((a, b) => a - b);
-  const p90 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.9))];
-  const step = niceStep(Math.max(1, p90) / 7) || 1;
-  const bins = Math.max(1, Math.round(p90 / step) || 1);
-  const data = new Array(bins + 1).fill(0);   // последний бакет — overflow «N+»
-  counts.forEach((c) => { let i = Math.floor(c / step); if (i > bins) i = bins; data[i]++; });
-  const labels = data.map((_, i) => i < bins ? shortNum(i * step) + "–" + shortNum((i + 1) * step) : shortNum(bins * step) + "+");
-  return { labels, data };
 }
 function showError(msg) {
   const el = $("error");

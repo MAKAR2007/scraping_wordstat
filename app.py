@@ -363,33 +363,33 @@ def _build_workbook(p):
     ws["A4"] = "Сформировано: %s" % _dt.datetime.now().strftime("%d.%m.%Y %H:%M")
     row = 6
     pairs = [
-        ("Период анализа", kpi.get("periodLabel")),
-        ("Объём спроса · рынок", kpi.get("market")),
-        ("Объём спроса · ОТП", kpi.get("otp")),
-        ("Доля ОТП в спросе", (kpi.get("share") or 0) / 100.0),
+        ("Диапазон анализа", kpi.get("range")),
+        ("Гранулярность", kpi.get("granularity")),
+        ("Последний период", kpi.get("periodLabel")),
+        ("Количество запросов · рынок", kpi.get("market")),
+        ("Количество запросов · ОТП", kpi.get("otp")),
+        ("Доля ОТП от рыночных запросов", (kpi.get("share") or 0) / 100.0),
         ("Динамика · рынок", kpi.get("growthMarket")),
         ("Динамика · ОТП", kpi.get("growthOtp")),
-        ("Пик спроса · рынок", kpi.get("peakMarket")),
-        ("Пик спроса · ОТП", kpi.get("peakOtp")),
-        ("Лидер · рынок", kpi.get("leader")),
-        ("Лидер · ОТП", kpi.get("leaderOtp")),
-        ("CAGR · рынок", kpi.get("cagrMarket")),
-        ("CAGR · ОТП", kpi.get("cagrOtp")),
-        ("Концентрация топ-5 · рынок", kpi.get("concMarket")),
-        ("Концентрация топ-5 · ОТП", kpi.get("concOtp")),
-        ("Индекс HHI · рынок", kpi.get("hhi")),
-        ("Широта спроса", kpi.get("breadth")),
+        ("SoS · доля голоса ОТП", kpi.get("sos")),
+        ("SoS · изменение за период", kpi.get("sosDelta")),
+        ("Лидер роста SoS", kpi.get("sosWinner")),
+        ("Брендовые запросы ОТП", kpi.get("brandOtp")),
+        ("Интенты · доля лидов", kpi.get("intentLeads")),
+        ("Интенты · сервисные", kpi.get("intentService")),
+        ("Интенты · токсичные", kpi.get("intentToxic")),
+        ("Индекс сезонности запросов ОТП", kpi.get("seasonIdx")),
     ]
     for name, value in pairs:
         ws.cell(row=row, column=1, value=name).font = label_font
         cell = ws.cell(row=row, column=2, value=value)
-        if name.startswith("Объём"):
+        if name.startswith("Количество"):
             cell.number_format = NUM
         if name.startswith("Доля"):
             cell.number_format = PCT
         row += 1
     ws.column_dimensions["A"].width = 34
-    ws.column_dimensions["B"].width = 28
+    ws.column_dimensions["B"].width = 40
 
     # --- Лист 2: Динамика (рынок, ОТП, доля) ---
     if labels:
@@ -400,10 +400,10 @@ def _build_workbook(p):
             o = otp[i] if i < len(otp) else None
             share = (o / m) if (m and o is not None) else None
             rows.append([lab, m, o, share])
-        fill_table(ws2, ["Период", "Рынок, показов", "ОТП, показов", "Доля ОТП"],
+        fill_table(ws2, ["Период", "Рынок, запросов", "ОТП, запросов", "Доля ОТП"],
                    rows, [16, 16, 15, 12], num_cols=(2, 3), pct_cols=(4,))
         line = LineChart()
-        line.title = "Динамика спроса: рынок и ОТП"
+        line.title = "Динамика запросов: рынок и ОТП"
         line.height, line.width = 10, 26
         data = Reference(ws2, min_col=2, max_col=3, min_row=1, max_row=1 + len(rows))
         cats = Reference(ws2, min_col=1, min_row=2, max_row=1 + len(rows))
@@ -411,17 +411,20 @@ def _build_workbook(p):
         line.set_categories(cats)
         ws2.add_chart(line, "F2")
 
-    # --- Лист 3: Регионы ---
+    # --- Лист 3: Регионы (сортировка — по Value Pool, как на дашборде) ---
     regions = p.get("regions") or []
     if regions:
         ws3 = wb.create_sheet("Регионы")
         rows = [[r.get("name"), r.get("market"), r.get("otp"),
                  (r.get("penetration") or 0) / 100.0,
+                 r.get("pool"),
                  (r.get("marketShare") or 0) / 100.0,
                  r.get("affinityIndex")] for r in regions]
-        fill_table(ws3, ["Регион (субъект РФ)", "Рынок, показов", "ОТП, показов",
-                         "Доля ОТП от рынка", "Доля региона в рынке", "Индекс соответствия"],
-                   rows, [38, 16, 15, 17, 19, 18], num_cols=(2, 3), pct_cols=(4, 5))
+        fill_table(ws3, ["Регион (субъект РФ)", "Рынок, запросов", "ОТП, запросов",
+                         "Доля ОТП от рынка", "Value Pool, запросов",
+                         "Доля региона в рынке", "Индекс соответствия"],
+                   rows, [38, 16, 15, 17, 19, 19, 18],
+                   num_cols=(2, 3, 5), pct_cols=(4, 6))
         n = min(len(regions), 15)
         chart = BarChart()
         chart.type = "bar"
@@ -446,7 +449,7 @@ def _build_workbook(p):
         fill_table(ws4, headers, rows, [16] + [14] * len(comp),
                    num_cols=tuple(range(2, len(comp) + 2)))
         line = LineChart()
-        line.title = "Брендовый спрос: ОТП и конкуренты"
+        line.title = "Брендовые запросы: ОТП и конкуренты"
         line.height, line.width = 10, 26
         data = Reference(ws4, min_col=2, max_col=1 + len(comp),
                          min_row=1, max_row=1 + len(rows))
@@ -477,7 +480,22 @@ def _build_workbook(p):
         line.set_categories(cats)
         ws5.add_chart(line, "H2")
 
-    # --- Лист 6: Сезонность (матрицы год × месяц) ---
+    # --- Лист 6: Интенты (структура брендовых запросов ОТП) ---
+    intents = p.get("intents") or {}
+    if intents.get("labels"):
+        ws_i = wb.create_sheet("Интенты")
+        rows = []
+        for i, lab in enumerate(intents["labels"]):
+            r = (intents.get("rows") or [[]])[i] if i < len(intents.get("rows") or []) else []
+            vals = [r[j] if j < len(r) else None for j in range(4)]
+            tot = sum(v for v in vals if v) or 1
+            rows.append([lab] + vals + [v / tot if v is not None else None for v in vals])
+        fill_table(ws_i, ["Месяц", "Продуктовый (лиды)", "Сервисный", "Токсичный", "Прочее",
+                          "Лиды, %", "Сервис, %", "Токсичные, %", "Прочее, %"],
+                   rows, [14, 17, 13, 13, 12, 11, 12, 13, 11],
+                   num_cols=(2, 3, 4, 5), pct_cols=(6, 7, 8, 9))
+
+    # --- Лист 7: Сезонность (матрицы год × месяц) ---
     sea = p.get("seasonality") or {}
     if sea.get("years"):
         ws6 = wb.create_sheet("Сезонность")
