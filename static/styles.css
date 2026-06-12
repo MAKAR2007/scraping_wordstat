@@ -138,6 +138,12 @@ input:focus, select:focus { border-color: var(--brand); box-shadow: 0 0 0 4px va
   padding: 11px 18px; font-size: 13px;
 }
 .btn--export:hover { filter: brightness(1.04); }
+.btn--ghost {
+  background: #fff; color: var(--ink-2);
+  border: 1.5px solid var(--line-2); box-shadow: none;
+  padding: 11px 16px; font-size: 13px; font-weight: 700;
+}
+.btn--ghost:hover { border-color: var(--brand); color: var(--brand-dark); background: var(--brand-soft); }
 .btn:disabled { opacity: .5; cursor: default; filter: grayscale(.3); box-shadow: none; }
 
 /* ----------------------------------------------------------------- stats */

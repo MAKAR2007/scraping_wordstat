@@ -78,6 +78,12 @@ document.addEventListener("DOMContentLoaded", () => {
   $("period").addEventListener("change", () => { if (state.marketPhrase) onPeriodChange(); });
   $("rangeFrom").addEventListener("change", () => { if (state.fullHist.keys.length) applyRange(); });
   $("rangeTo").addEventListener("change", () => { if (state.fullHist.keys.length) applyRange(); });
+  // Быстрый анализ всей истории: сбрасываем «с … по …» одним кликом.
+  $("rangeAllBtn").addEventListener("click", () => {
+    $("rangeFrom").value = "";
+    $("rangeTo").value = "";
+    if (state.fullHist.keys.length) applyRange();
+  });
   $("growthStart").addEventListener("change", () => { growthStart = parseInt($("growthStart").value, 10) || 0; renderGrowthIndexChart(); });
   document.querySelectorAll(".toggle-btn[data-top]").forEach((b) => {
     b.addEventListener("click", () => {
