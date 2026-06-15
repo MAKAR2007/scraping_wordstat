@@ -950,8 +950,22 @@ function renderBrandSection() {
     $("sosLeaderFoot").textContent = "недостаточно данных " + perLabel;
   }
 
-  // Чистые деления лог-оси (1/2/5 ×10ⁿ) — иначе подписи наползают друг на друга.
-  const LOG_TICKS = [100000, 200000, 500000, 1000000, 2000000, 5000000, 10000000, 20000000];
+  // Границы и деления лог-оси — динамические по данным и по «красивым»
+  // отметкам 1/2/5×10ⁿ (квартал/год дают суммы кратно больше помесячных,
+  // фиксированный максимум их «срезал бы», а округление до 10ⁿ — пустит верх).
+  const flatVals = bankAgg.flatMap((r) => r.vals).filter((v) => v > 0);
+  const minV = flatVals.length ? Math.min(...flatVals) : 1e5;
+  const maxV = flatVals.length ? Math.max(...flatVals) : 1e7;
+  const logBound = (v, up) => {
+    const e = Math.floor(Math.log10(v)), base = Math.pow(10, e), m = v / base, steps = [1, 2, 5, 10];
+    if (up) { for (const s of steps) if (m <= s + 1e-9) return s * base; return 10 * base; }
+    let r = base; for (const s of steps) if (s <= m + 1e-9) r = s * base; return r;
+  };
+  const yLo = logBound(minV, false), yHi = logBound(maxV, true);
+  const LOG_TICKS = [];
+  for (let e = Math.floor(Math.log10(yLo)); e <= Math.ceil(Math.log10(yHi)); e++) [1, 2, 5].forEach((m) => {
+    const v = m * Math.pow(10, e); if (v >= yLo - 1 && v <= yHi + 1) LOG_TICKS.push(v);
+  });
   destroy("brandDemand");
   charts.brandDemand = new Chart($("brandDemandChart"), {
     type: "line",
@@ -966,7 +980,7 @@ function renderBrandSection() {
         tooltip: { callbacks: { label: (c) => " " + c.dataset.label + ": " + fmt(c.parsed.y) } } },
       scales: {
         x: { ticks: { maxRotation: 50, minRotation: 45, autoSkip: true, font: { size: 10 } } },
-        y: { type: "logarithmic", min: 100000, max: 20000000,
+        y: { type: "logarithmic", min: yLo, max: yHi,
           ticks: { autoSkip: false, callback: (v) => (LOG_TICKS.indexOf(v) >= 0 ? shortNum(v) : "") } },
       },
     },
@@ -1247,6 +1261,7 @@ function nextMonthLabels(lastKey, k) {
 }
 function shortNum(n) {
   n = Number(n) || 0;
+  if (n >= 1e9) return (n / 1e9).toFixed(n >= 1e10 ? 0 : 1).replace(".0", "") + " млрд";
   if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace(".0", "") + " млн";
   if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1).replace(".0", "") + " тыс";
   return String(Math.round(n));
