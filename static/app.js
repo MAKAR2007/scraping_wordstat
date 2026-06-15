@@ -16,6 +16,7 @@ let excluded = new Set();   // id субъектов, исключённых и�
 let regionRank = "market";  // ранжирование распределения: market | penetration
 let pieMetric = "otp";      // пайчарт: otp | market
 let seasonMetric = "market";// сезонность: market | otp
+let keyRateMetric = "market"; // запросы на графике ставки: market | otp
 let growthStart = 0;        // индекс стартовой точки темпа роста (=100)
 
 const $ = (id) => document.getElementById(id);
@@ -106,6 +107,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindToggle("rankToggle", (d) => { regionRank = d.rank; renderRegionsChart(); });
   bindToggle("pieToggle", (d) => { pieMetric = d.metric; renderShareChart(); });
   bindToggle("seasonToggle", (d) => { seasonMetric = d.metric; renderSeasonalityChart(); });
+  bindToggle("keyRateToggle", (d) => { keyRateMetric = d.metric; renderKeyRateChart(); });
 });
 
 // ------------------------------------------- диапазон дат (с .. по) -------
@@ -200,11 +202,6 @@ function renderAll() {
   recomputeRegions();
   renderKpi();
   renderPeriodViews();
-  renderSeasonalityChart();
-  renderQualityKpis();
-  renderIntentChart();
-  renderMobileChart();
-  renderKeyRateChart();
 }
 
 function onPeriodChange() {
@@ -213,7 +210,8 @@ function onPeriodChange() {
   renderPeriodViews();
 }
 
-// Всё, что зависит от гранулярности (бакет регионов + графики периода).
+// Всё, что зависит от гранулярности/диапазона — пересчитывается целиком,
+// чтобы смена «месяц/квартал/год» меняла разметку во всех графиках.
 function renderPeriodViews() {
   renderRegionsChart();
   renderDynamicsChart();
@@ -222,6 +220,11 @@ function renderPeriodViews() {
   renderOpportunityChart();
   renderShareChart();
   renderBrandSection();
+  renderSeasonalityChart();
+  renderQualityKpis();
+  renderIntentChart();
+  renderMobileChart();
+  renderKeyRateChart();
   renderRegionsTable();
 }
 
@@ -244,6 +247,43 @@ function aggregate(hist, period) {
     labels: order.map((id) => map[id].label), market: order.map((id) => map[id].market),
     otp: order.map((id) => map[id].otp), counts: order.map((id) => map[id].count),
   };
+}
+
+// Агрегирует один месячный ряд в бакеты выбранной гранулярности.
+// mode "sum" — объёмы (запросы), "avg" — проценты/ставки. Пустые бакеты → null.
+// keys по умолчанию — state.hist.keys (все графики строятся от него).
+function aggByPeriod(values, period, mode = "sum", keys = state.hist.keys) {
+  if (period === "month") {
+    return { labels: state.hist.labels.slice(), keys: keys.slice(), values: values.slice() };
+  }
+  const order = [], map = {};
+  keys.forEach((k, i) => {
+    const y = k.slice(0, 4), m = parseInt(k.slice(5, 7), 10);
+    const id = period === "year" ? y : y + "Q" + Math.ceil(m / 3);
+    const label = period === "year" ? y : Math.ceil(m / 3) + " кв. " + y;
+    const bk = period === "year" ? y + "-12"
+      : y + "-" + String(Math.ceil(m / 3) * 3).padStart(2, "0");
+    if (!(id in map)) { map[id] = { sum: 0, cnt: 0, label, key: bk }; order.push(id); }
+    if (values[i] != null) { map[id].sum += values[i]; map[id].cnt += 1; }
+  });
+  return {
+    labels: order.map((id) => map[id].label),
+    keys: order.map((id) => map[id].key),
+    values: order.map((id) => (map[id].cnt === 0 ? null : (mode === "avg" ? map[id].sum / map[id].cnt : map[id].sum))),
+  };
+}
+
+// Подписи следующих h периодов после lastKey ("YYYY-MM").
+function nextPeriodLabels(lastKey, h, period) {
+  let y = +lastKey.slice(0, 4), m = +lastKey.slice(5, 7);
+  const out = [];
+  if (period === "year") { for (let i = 0; i < h; i++) { y++; out.push(String(y)); } return out; }
+  if (period === "quarter") {
+    let q = Math.ceil(m / 3);
+    for (let i = 0; i < h; i++) { q++; if (q > 4) { q = 1; y++; } out.push(q + " кв. " + y); }
+    return out;
+  }
+  return nextMonthLabels(lastKey, h);
 }
 
 function currentBucket() {
@@ -524,17 +564,22 @@ function holtDamped(y, h, alpha = 0.45, beta = 0.22, phi = 0.9) {
 }
 
 function computeForecastData() {
-  const h = state.hist;
-  const share = h.market.map((m, i) => (m ? h.otp[i] / m * 100 : 0));
-  const n = share.length, lastK = Math.min(24, n), start = n - lastK;
-  const histLabels = h.labels.slice(start), histShare = share.slice(start);
-  const K = 6, z = 1.28;          // ~80% интервал
+  // Ряд доли ОТП строится на выбранной гранулярности; горизонт прогноза:
+  // месяц — 6 мес, квартал — 1 квартал, год — 1 год.
+  const per = periodKey();
+  const aggM = aggByPeriod(state.hist.market, per), aggO = aggByPeriod(state.hist.otp, per);
+  const share = aggM.values.map((m, i) => (m ? aggO.values[i] / m * 100 : 0));
+  const keys = aggM.keys;
+  const n = share.length;
+  const K = per === "month" ? 6 : per === "quarter" ? 1 : 1, z = 1.28;   // ~80% интервал
+  const lastK = per === "month" ? Math.min(24, n) : n, start = n - lastK;
+  const histLabels = aggM.labels.slice(start), histShare = share.slice(start);
   const { fc, sigma } = holtDamped(histShare, K);
-  const futLabels = nextMonthLabels(h.keys[n - 1], K);
+  const futLabels = nextPeriodLabels(keys[n - 1], K, per);
   const labels = histLabels.concat(futLabels);
   const actual = histShare.concat(new Array(K).fill(null));
   const lastVal = histShare[histShare.length - 1];
-  const pad = new Array(lastK - 1).fill(null);
+  const pad = new Array(histShare.length - 1).fill(null);
   const base = pad.concat([lastVal]), opt = pad.concat([lastVal]), pess = pad.concat([lastVal]);
   for (let k = 1; k <= K; k++) {
     const spread = z * sigma * Math.sqrt(k);
@@ -576,16 +621,43 @@ function renderForecastChart() {
 
 function renderSeasonalityChart() {
   const metric = seasonMetric, canvasId = "seasonalityChart", chartKey = "seasonality";
-  const h = state.hist, years = {};
-  h.keys.forEach((k, i) => { const y = k.slice(0, 4), m = parseInt(k.slice(5, 7), 10) - 1; (years[y] = years[y] || new Array(12).fill(null))[m] = h[metric][i]; });
+  const h = state.hist, per = periodKey();
+  destroy(chartKey);
+
+  // Год: «сезонности внутри года» нет — показываем годовые итоги одной линией.
+  if (per === "year") {
+    const agg = aggByPeriod(h[metric], "year");
+    charts[chartKey] = new Chart($(canvasId), {
+      type: "line",
+      data: { labels: agg.labels, datasets: [{ label: metric === "otp" ? "ОТП" : "Рынок",
+        data: agg.values, borderColor: metric === "otp" ? C.otp : C.market,
+        backgroundColor: metric === "otp" ? C.otpSoft : C.marketSoft, fill: true, tension: .35, pointRadius: 3, borderWidth: 2.8 }] },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => " " + fmt(c.parsed.y) + " запросов" } } },
+        scales: { y: { ticks: { callback: shortNum } } },
+      },
+    });
+    return;
+  }
+
+  // Месяц/квартал: каждая линия — год, по оси X месяцы (12) или кварталы (4).
+  const slots = per === "quarter" ? 4 : 12;
+  const xLabels = per === "quarter" ? ["1 кв.", "2 кв.", "3 кв.", "4 кв."] : MONTH_ABBR;
+  const years = {};
+  h.keys.forEach((k, i) => {
+    const y = k.slice(0, 4), m = parseInt(k.slice(5, 7), 10) - 1;
+    const slot = per === "quarter" ? Math.floor(m / 3) : m;
+    const row = years[y] = years[y] || new Array(slots).fill(null);
+    if (h[metric][i] != null) row[slot] = (row[slot] || 0) + h[metric][i];
+  });
   const recent = Object.keys(years).sort().slice(-6);
   const datasets = recent.map((y, idx) => ({
     label: y, data: years[y], borderColor: YEAR_COLORS[idx % YEAR_COLORS.length], backgroundColor: "transparent",
     tension: .35, pointRadius: 0, spanGaps: true, borderWidth: idx === recent.length - 1 ? 3.2 : 1.8,
   }));
-  destroy(chartKey);
   charts[chartKey] = new Chart($(canvasId), {
-    type: "line", data: { labels: MONTH_ABBR, datasets },
+    type: "line", data: { labels: xLabels, datasets },
     options: {
       responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
       plugins: { legend: { display: true, position: "top", labels: { boxWidth: 12, font: { weight: 700 } } },
@@ -652,10 +724,12 @@ function renderShareChart() {
     type: "doughnut",
     data: { labels, datasets: [{ data, backgroundColor: bg, borderWidth: 2, borderColor: "#fff" }] },
     options: {
-      responsive: true, maintainAspectRatio: false, cutout: "58%",
+      responsive: true, maintainAspectRatio: false, cutout: "62%",
+      layout: { padding: 4 },
       plugins: {
         legend: {
-          position: "right", labels: { font: { size: 11 }, boxWidth: 12, padding: 7 },
+          position: "bottom", align: "center",
+          labels: { font: { size: 11.5 }, usePointStyle: true, pointStyle: "circle", boxWidth: 8, boxHeight: 8, padding: 9 },
           onClick: (e, item, legend) => {
             const ci = legend.chart, idx = item.index;
             ci.toggleDataVisibility(idx);
@@ -826,32 +900,28 @@ function renderBrandSection() {
   if (!rows) { eyebrow.classList.add("hidden"); sect.classList.add("hidden"); return; }
   eyebrow.classList.remove("hidden"); sect.classList.remove("hidden");
 
-  const h = state.hist;
-  const idx = h.keys.map((k, i) => ((state.brandOtp || [])[i] != null ? i : -1)).filter((i) => i >= 0);
-  const labels = idx.map((i) => h.labels[i]);
-  const otpRow = rows.find((r) => r.brand === "ОТП");
-
-  const sos = idx.map((i) => {
-    const sum = rows.reduce((a, r) => a + (r.series[i] || 0), 0);
-    return sum ? (otpRow.series[i] || 0) / sum * 100 : 0;
-  });
-  const last = sos.length - 1;
-
-  // Окно сравнения = выбранная гранулярность: месяц / квартал / год.
+  // Гранулярность: ряды банков агрегируются в бакеты периода (м/кв/год),
+  // сравнение «за период» = соседние бакеты.
   const per = periodKey();
-  const win = per === "year" ? 12 : per === "quarter" ? 3 : 1;
   const perLabel = per === "year" ? "за год" : per === "quarter" ? "за квартал" : "за месяц";
   const perCmp = per === "year" ? "г/г" : per === "quarter" ? "кв/кв" : "м/м";
 
-  // Сумма запросов по топ-5 банкам за окно периода + прирост к прошлому окну.
-  const total = idx.map((i) => rows.reduce((a, r) => a + (r.series[i] || 0), 0));
-  const winSum = (arr, endPos) => {
-    let s = 0;
-    for (let k = 0; k < win; k++) { const p = endPos - k; if (p >= 0) s += arr[p] || 0; }
-    return s;
-  };
-  const tNow = winSum(total, last);
-  const tPrev = idx.length >= win * 2 ? winSum(total, last - win) : 0;
+  const otpRow = rows.find((r) => r.brand === "ОТП");
+  const otpAgg = aggByPeriod(otpRow.series, per);
+  const valid = otpAgg.values.map((v, i) => (v != null && v > 0 ? i : -1)).filter((i) => i >= 0);
+  const labels = valid.map((i) => otpAgg.labels[i]);
+  const bankAgg = rows.map((r) => {
+    const a = aggByPeriod(r.series, per);
+    return { brand: r.brand, est: r.est, vals: valid.map((i) => a.values[i] || 0) };
+  });
+  const otpVals = bankAgg.find((r) => r.brand === "ОТП").vals;
+  const total = labels.map((_, j) => bankAgg.reduce((a, r) => a + r.vals[j], 0));
+  const sos = labels.map((_, j) => (total[j] ? otpVals[j] / total[j] * 100 : 0));
+  const last = labels.length - 1;
+  const prev = last - 1;
+
+  // Плитка 1: запросы топ-5 банков за период. Плитка 2: прирост к прошлому.
+  const tNow = total[last] || 0, tPrev = prev >= 0 ? total[prev] : 0;
   $("brandTotalVal").textContent = fmt(tNow);
   $("brandTotalFoot").textContent = "сумма 5 банков " + perLabel;
   const gEl = $("brandGrowthVal");
@@ -861,23 +931,19 @@ function renderBrandSection() {
   } else { gEl.textContent = "—"; gEl.className = "stat-value"; }
   $("brandGrowthFoot").textContent = "топ-5 банков · " + perCmp;
 
-  // SoS ОТП: значение + прирост доли голоса за период в подписи.
-  $("sosValue").textContent = sos[last].toFixed(2).replace(".", ",") + "%";
-  const dWin = sos.length > win ? sos[last] - sos[last - win] : null;
+  // Плитка 3: SoS ОТП + прирост доли голоса за период.
+  $("sosValue").textContent = (sos[last] || 0).toFixed(2).replace(".", ",") + "%";
+  const dWin = prev >= 0 ? sos[last] - sos[prev] : null;
   $("sosValueFoot").textContent = dWin == null ? "доля голоса"
     : "доля голоса · " + (dWin >= 0 ? "+" : "−") + Math.abs(dWin).toFixed(2).replace(".", ",") + " п.п. " + perCmp;
 
-  // Лидер роста SoS: банк с максимальным приростом доли голоса за период.
-  const sharesAt = (pos) => {
-    const i = idx[pos];
-    const sum = rows.reduce((a, r) => a + (r.series[i] || 0), 0) || 1;
-    return rows.map((r) => (r.series[i] || 0) / sum * 100);
-  };
-  if (idx.length > win) {
-    const nowS = sharesAt(idx.length - 1), prevS = sharesAt(idx.length - 1 - win);
-    const deltas = nowS.map((v, j) => v - prevS[j]);
-    let wi = 0; deltas.forEach((d, j) => { if (d > deltas[wi]) wi = j; });
-    $("sosLeader").textContent = rows[wi].brand;
+  // Плитка 4: лидер роста SoS — банк с макс. приростом доли голоса за период.
+  const sharesAt = (j) => bankAgg.map((r) => (total[j] ? r.vals[j] / total[j] * 100 : 0));
+  if (prev >= 0) {
+    const nowS = sharesAt(last), prevS = sharesAt(prev);
+    const deltas = nowS.map((v, k) => v - prevS[k]);
+    let wi = 0; deltas.forEach((d, k) => { if (d > deltas[wi]) wi = k; });
+    $("sosLeader").textContent = bankAgg[wi].brand;
     $("sosLeaderFoot").textContent = "+" + deltas[wi].toFixed(2).replace(".", ",") + " п.п. SoS " + perLabel;
   } else {
     $("sosLeader").textContent = "—";
@@ -889,8 +955,8 @@ function renderBrandSection() {
   destroy("brandDemand");
   charts.brandDemand = new Chart($("brandDemandChart"), {
     type: "line",
-    data: { labels, datasets: rows.map((r) => ({
-      label: r.brand, data: idx.map((i) => r.series[i]),
+    data: { labels, datasets: bankAgg.map((r) => ({
+      label: r.brand, data: r.vals,
       borderColor: r.brand === "ОТП" ? C.otp : brandColor(r.brand), backgroundColor: "transparent",
       borderWidth: r.brand === "ОТП" ? 3.6 : 2, tension: .35, pointRadius: 0,
     })) },
@@ -1006,8 +1072,22 @@ const stackLabelsPlugin = {
 };
 
 function renderIntentChart() {
-  const spAbs = intentSplit().slice(-12), labels = state.hist.labels.slice(-12);
-  // 100%-нормировка: каждый месяц = 100, сегменты — доли интентов.
+  // Компоненты интентов агрегируются в бакеты выбранной гранулярности,
+  // берём последние 12 бакетов.
+  const per = periodKey();
+  const split = intentSplit();
+  const fields = ["commercial", "service", "toxic", "other"];
+  const aggF = {};
+  fields.forEach((f) => { aggF[f] = aggByPeriod(split.map((x) => x[f]), per).values; });
+  const allLabels = aggByPeriod(split.map(() => 0), per).labels;
+  const n = allLabels.length, from = Math.max(0, n - 12);
+  const labels = allLabels.slice(from);
+  const spAbs = [];
+  for (let i = from; i < n; i++) {
+    spAbs.push({ commercial: aggF.commercial[i] || 0, service: aggF.service[i] || 0,
+                 toxic: aggF.toxic[i] || 0, other: aggF.other[i] || 0 });
+  }
+  // 100%-нормировка: каждый бакет = 100, сегменты — доли интентов.
   const sp = spAbs.map((t) => {
     const tot = t.commercial + t.service + t.toxic + t.other || 1;
     return { commercial: t.commercial / tot * 100, service: t.service / tot * 100,
@@ -1058,12 +1138,16 @@ function renderMobileChart() {
     return;
   }
   panel.classList.remove("hidden");
+  // Проценты усредняются внутри бакета выбранной гранулярности.
+  const per = periodKey();
+  const aggMkt = aggByPeriod(mkt, per, "avg"), aggOtp = aggByPeriod(otp, per, "avg");
+  const labels = aggMkt.labels;
   destroy("mobile");
   charts.mobile = new Chart($("mobileChart"), {
     type: "line",
-    data: { labels: h.labels, datasets: [
-      { label: "ОТП", data: otp, borderColor: C.otp, backgroundColor: C.otpSoft, fill: true, tension: .35, pointRadius: 0, borderWidth: 2.5 },
-      { label: "Рынок", data: mkt, borderColor: C.market, backgroundColor: "transparent", tension: .35, pointRadius: 0, borderWidth: 2.5 },
+    data: { labels, datasets: [
+      { label: "ОТП", data: aggOtp.values, borderColor: C.otp, backgroundColor: C.otpSoft, fill: true, tension: .35, pointRadius: 0, borderWidth: 2.5 },
+      { label: "Рынок", data: aggMkt.values, borderColor: C.market, backgroundColor: "transparent", tension: .35, pointRadius: 0, borderWidth: 2.5 },
     ] },
     options: {
       responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
@@ -1105,16 +1189,23 @@ function pearson(a, b) {
 }
 
 function renderKeyRateChart() {
-  const h = state.hist;
-  const rate = keyRateSeries(h.keys);
+  const per = periodKey();
+  // Запросы (рынок/ОТП) суммируются по бакету, ставка усредняется.
+  const reqMetric = keyRateMetric === "otp" ? "otp" : "market";
+  const aggReq = aggByPeriod(state.hist[reqMetric], per, "sum");
+  const aggRate = aggByPeriod(keyRateSeries(state.hist.keys), per, "avg");
+  const isOtp = reqMetric === "otp";
+  const reqColor = isOtp ? C.otp : C.market;
+  const key = $("keyRateSeriesKey");
+  if (key) { key.textContent = isOtp ? "запросы ОТП" : "запросы рынка"; key.className = "key " + (isOtp ? "key--otp" : "key--market"); }
   destroy("keyRate");
   charts.keyRate = new Chart($("keyRateChart"), {
     type: "line",
-    data: { labels: h.labels, datasets: [
-      { label: "Спрос рынка", data: h.market, yAxisID: "y", borderColor: C.market,
-        backgroundColor: C.marketSoft, fill: true, tension: .35, pointRadius: 0, borderWidth: 2.5 },
-      { label: "Ключевая ставка ЦБ, %", data: rate, yAxisID: "y2", borderColor: "#E8650A",
-        borderDash: [6, 4], backgroundColor: "transparent", stepped: true, pointRadius: 0, borderWidth: 2.2 },
+    data: { labels: aggReq.labels, datasets: [
+      { label: isOtp ? "Запросы ОТП" : "Запросы рынка", data: aggReq.values, yAxisID: "y", borderColor: reqColor,
+        backgroundColor: isOtp ? C.otpSoft : C.marketSoft, fill: true, tension: .35, pointRadius: 0, borderWidth: 2.5 },
+      { label: "Ключевая ставка ЦБ, %", data: aggRate.values, yAxisID: "y2", borderColor: "#E8650A",
+        borderDash: [6, 4], backgroundColor: "transparent", stepped: per === "month", pointRadius: 0, borderWidth: 2.2 },
     ] },
     options: {
       responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
@@ -1124,7 +1215,7 @@ function renderKeyRateChart() {
           : " запросы: " + fmt(c.parsed.y) } } },
       scales: {
         x: { ticks: { maxRotation: 50, minRotation: 45, autoSkip: true, font: { size: 10 } } },
-        y: { position: "left", title: { display: true, text: "Запросы", color: C.market }, ticks: { callback: shortNum } },
+        y: { position: "left", title: { display: true, text: "Запросы", color: reqColor }, ticks: { callback: shortNum } },
         y2: { position: "right", grid: { drawOnChartArea: false }, title: { display: true, text: "Ставка ЦБ, %", color: "#E8650A" },
           ticks: { callback: (v) => v + "%" } },
       },

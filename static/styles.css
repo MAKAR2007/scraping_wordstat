@@ -252,6 +252,7 @@ input:focus, select:focus { border-color: var(--brand); box-shadow: 0 0 0 4px va
 
 .chart-box { position: relative; height: 300px; }
 .chart-box--tall { height: 520px; }
+.chart-box--pie { height: 420px; }
 
 /* ---------------------------------------------------------------- toggle */
 .toggle { display: flex; gap: 4px; background: var(--bg); padding: 4px; border-radius: 11px; border: 1px solid var(--line); }
