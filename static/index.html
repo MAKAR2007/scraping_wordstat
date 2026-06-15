@@ -102,9 +102,12 @@
           </div>
           <div class="head-controls">
             <select id="excludeSelect" class="filter filter--select" title="Исключить регион из графиков"></select>
-            <div class="toggle" id="rankToggle">
-              <button class="toggle-btn active" data-rank="market">По запросам</button>
-              <button class="toggle-btn" data-rank="penetration">По доле ОТП</button>
+            <div class="toggle-wrap">
+              <span class="toggle-cap">Сортировка</span>
+              <div class="toggle" id="rankToggle">
+                <button class="toggle-btn active" data-rank="market">По запросам</button>
+                <button class="toggle-btn" data-rank="penetration">По доле ОТП</button>
+              </div>
             </div>
             <div class="toggle">
               <button class="toggle-btn active" data-top="15">Топ-15</button>
@@ -117,9 +120,14 @@
       </section>
 
       <section class="panel">
+        <h2>Доля запросов ОТП и сценарный прогноз на 6 месяцев</h2>
+        <div class="chart-box"><canvas id="forecastChart"></canvas></div>
+      </section>
+
+      <section class="panel">
         <div class="panel-head">
           <div>
-            <h2>Динамика частоты</h2>
+            <h2>Динамика запросов</h2>
             <p class="chart-note"><span class="key key--otp">ОТП</span> — левая ось, <span class="key key--market">рынок</span> — правая ось</p>
           </div>
           <select id="dynRegion" class="filter filter--select" title="Регион для динамики"></select>
@@ -139,12 +147,6 @@
       </section>
 
       <section class="panel">
-        <h2>Доля ОТП во времени и прогноз</h2>
-        <p class="chart-note">Факт и прогноз на 6 месяцев · сценарии: оптимистичный / базовый / пессимистичный</p>
-        <div class="chart-box"><canvas id="forecastChart"></canvas></div>
-      </section>
-
-      <section class="panel">
         <div class="panel-head">
           <div>
             <h2>Матрица возможностей по регионам</h2>
@@ -153,7 +155,7 @@
         </div>
         <div class="matrix-legend">
           <span class="ml-item"><span class="ml-dot" style="background:#FF7A1A"></span>Приоритет роста — большой рынок, низкая доля ОТП</span>
-          <span class="ml-item"><span class="ml-dot" style="background:#21A36B"></span>Сильные позиции — доля ОТП выше медианы</span>
+          <span class="ml-item"><span class="ml-dot" style="background:#21A36B"></span>ОТП уже узнаваем — доля выше медианы</span>
           <span class="ml-item"><span class="ml-dot" style="background:#AEB6C4"></span>Фоновые — малый рынок, низкая доля</span>
         </div>
         <div id="excludeChipsMatrix" class="chips hidden"></div>
@@ -164,36 +166,35 @@
       <p class="section-eyebrow hidden" id="brandEyebrow">Бренды банков · доля голоса (Share of Search)</p>
       <div class="hidden" id="brandSection">
         <section class="stats">
+          <div class="stat-card stat-card--market">
+            <span class="stat-label">Запросы топ-5 банков</span>
+            <span id="brandTotalVal" class="stat-value">—</span>
+            <span class="stat-foot" id="brandTotalFoot">сумма запросов 5 банков</span>
+          </div>
+          <div class="stat-card stat-card--market">
+            <span class="stat-label">Прирост запросов банков</span>
+            <span id="brandGrowthVal" class="stat-value">—</span>
+            <span class="stat-foot" id="brandGrowthFoot">топ-5 банков за период</span>
+          </div>
           <div class="stat-card stat-card--otp">
             <span class="stat-label">SoS · доля голоса ОТП</span>
             <span id="sosValue" class="stat-value">—</span>
-            <span class="stat-foot">ОТП ÷ (ОТП + Сбер + Т-Банк + Альфа + ВТБ)</span>
+            <span class="stat-foot stat-foot--tight" id="sosValueFoot">ОТП ÷ (ОТП + Сбер + Т-Банк + Альфа + ВТБ)</span>
           </div>
-          <div class="stat-card">
-            <span class="stat-label" id="sosDeltaLabel">SoS · изменение</span>
-            <span id="sosDelta" class="stat-value">—</span>
-            <span class="stat-foot" id="sosDeltaFoot">прирост доли голоса, п.п.</span>
-          </div>
-          <div class="stat-card">
+          <div class="stat-card stat-card--otp-soft">
             <span class="stat-label">Лидер роста SoS</span>
             <span id="sosLeader" class="stat-value stat-value--sm">—</span>
             <span class="stat-foot" id="sosLeaderFoot">—</span>
           </div>
-          <div class="stat-card stat-card--otp-soft">
-            <span class="stat-label">Брендовые запросы ОТП</span>
-            <span id="brandOtpVal" class="stat-value">—</span>
-            <span class="stat-foot" id="brandOtpFoot">запросы «ОТП Банк»</span>
-          </div>
         </section>
         <div class="grid-2">
           <section class="panel">
-            <h2>Брендовые запросы банков</h2>
-            <p class="chart-note">Логарифмическая шкала.</p>
+            <h2>Брендовые запросы по топ-5 банкам</h2>
+            <p class="chart-note">Логарифмическая шкала</p>
             <div class="chart-box"><canvas id="brandDemandChart"></canvas></div>
           </section>
           <section class="panel">
             <h2>Доля голоса ОТП среди банков (SoS)</h2>
-            <p class="chart-note">Доля ОТП в брендовых запросах пяти банков · рост линии — бренд укрепляется</p>
             <div class="chart-box"><canvas id="sosChart"></canvas></div>
           </section>
         </div>
@@ -203,7 +204,7 @@
       <p class="section-eyebrow">Качество брендовых запросов</p>
       <section class="stats">
         <div class="stat-card stat-card--market">
-          <span class="stat-label">Доля «лидов» (намерение купить)</span>
+          <span class="stat-label">Доля лидов</span>
           <span id="kpiIntent" class="stat-value">—</span>
           <span class="stat-foot">«оформить, заказать, условия, кэшбэк» — новые клиенты</span>
         </div>
@@ -226,12 +227,11 @@
       <div class="grid-2">
         <section class="panel">
           <h2>Структура запросов ОТП по интентам</h2>
-          <p class="chart-note">Доли интентов в брендовых запросах, % за месяц · последние 12 мес</p>
           <div class="chart-box"><canvas id="intentChart"></canvas></div>
         </section>
         <section class="panel">
-          <h2>Mobile-доля запросов · ОТП против рынка</h2>
-          <p class="chart-note">Доля мобильных запросов, %</p>
+          <h2>Доля запросов с мобильных устройств</h2>
+          <p class="chart-note chart-note--grey">Отражает технологичность аудитории бренда</p>
           <div class="chart-box"><canvas id="mobileChart"></canvas></div>
         </section>
       </div>
@@ -254,7 +254,7 @@
         <div class="panel-head">
           <div>
             <h2>Количество запросов и ключевая ставка ЦБ РФ</h2>
-            <p class="chart-note">Запросы рынка (левая ось) и ключевая ставка ЦБ, % (правая ось, пунктир)</p>
+            <p class="chart-note"><span class="key key--market">запросы</span> — левая ось, <span class="key key--rate">ключевая ставка ЦБ РФ</span> — правая ось</p>
           </div>
         </div>
         <div class="chart-box"><canvas id="keyRateChart"></canvas></div>
@@ -275,33 +275,27 @@
           <div class="chart-box"><canvas id="shareChart"></canvas></div>
         </section>
         <section class="panel">
-          <h2>Проникновение ОТП по регионам · топ-15</h2>
-          <p class="chart-note">Где бренд ОТП занимает наибольшую долю локальных запросов</p>
-          <div class="chart-box"><canvas id="penByRegionChart"></canvas></div>
+          <div class="panel-head">
+            <div>
+              <h2>Таблица регионов</h2>
+              <p class="chart-note"><b>Индекс</b> — индекс соответствия: 100 = регион ищет ОТП так же активно, как рынок в целом; выше 100 — активнее</p>
+            </div>
+            <input id="tableFilter" type="text" class="filter" placeholder="Фильтр…">
+          </div>
+          <div class="table-wrap">
+            <table id="regionsTable">
+              <thead>
+                <tr>
+                  <th>№</th><th>Регион</th>
+                  <th>Рынок</th><th>ОТП</th>
+                  <th>Доля ОТП, %</th><th>Индекс</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
         </section>
       </div>
-
-      <section class="panel">
-        <div class="panel-head">
-          <div>
-            <h2>Таблица регионов · потенциал роста</h2>
-            <p class="chart-note">Сортировка по <b>Value Pool</b> — упущенной выгоде региона (запросы рынка × разрыв доли ОТП до целевой)</p>
-          </div>
-          <input id="tableFilter" type="text" class="filter" placeholder="Фильтр по названию…">
-        </div>
-        <div class="table-wrap">
-          <table id="regionsTable">
-            <thead>
-              <tr>
-                <th>№</th><th>Регион</th>
-                <th>Рынок</th><th>ОТП</th>
-                <th>Доля ОТП, %</th><th>Value Pool, запросов</th><th>Индекс</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </section>
     </div>
   </main>
 

@@ -144,6 +144,17 @@ input:focus, select:focus { border-color: var(--brand); box-shadow: 0 0 0 4px va
 }
 .range-all:hover { background: #ddeec7; }
 
+/* Тумблер с подписью-капшеном (напр. «Сортировка»). */
+.toggle-wrap { display: inline-flex; align-items: center; gap: 8px; }
+.toggle-cap { font-size: 12px; font-weight: 700; color: var(--muted); white-space: nowrap; }
+
+/* Подпись-«ключ» для ставки ЦБ (оранжевый), к графику со ставкой. */
+.key--rate { background: #FFE9D6; color: #C2560A; }
+
+/* Узкая подпись в один ряд (формула SoS и т.п.). */
+.stat-foot--tight { font-size: 11px; white-space: nowrap; letter-spacing: -.2px; }
+.chart-note--grey { color: var(--muted); font-weight: 500; }
+
 /* --------------------------------------------------------------- buttons */
 .btn {
   font: inherit; font-weight: 800; letter-spacing: .2px;
@@ -165,7 +176,9 @@ input:focus, select:focus { border-color: var(--brand); box-shadow: 0 0 0 4px va
 .btn:disabled { opacity: .5; cursor: default; filter: grayscale(.3); box-shadow: none; }
 
 /* ----------------------------------------------------------------- stats */
-.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; margin-bottom: 20px; }
+/* auto-fit: карточки держат разумную ширину и не растягиваются с пустотой
+   справа на средних экранах (4-в-ряд на десктопе → плавно к 1 на телефоне). */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 18px; margin-bottom: 20px; }
 .stat-card {
   position: relative; overflow: hidden;
   background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);

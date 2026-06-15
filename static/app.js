@@ -219,7 +219,6 @@ function renderPeriodViews() {
   renderDynamicsChart();
   renderGrowthIndexChart();
   renderForecastChart();
-  renderPenByRegionChart();
   renderOpportunityChart();
   renderShareChart();
   renderBrandSection();
@@ -431,7 +430,8 @@ function renderDynamicsChart() {
     options: {
       responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
       plugins: {
-        legend: { display: true, position: "top", labels: { boxWidth: 12, font: { weight: 700 } } },
+        // Легенда не нужна — её роль играет подпись с цветными ключами под H2.
+        legend: { display: false },
         tooltip: { callbacks: {
           label: (c) => " " + c.dataset.label + ": " + fmt(c.parsed.y),
           afterBody: (items) => {
@@ -574,22 +574,6 @@ function renderForecastChart() {
   });
 }
 
-function renderPenByRegionChart() {
-  const rows = [...state.regions].filter((r) => r.market > 0).sort((a, b) => b.penetration - a.penetration).slice(0, 15);
-  destroy("penByRegion");
-  charts.penByRegion = new Chart($("penByRegionChart"), {
-    type: "bar",
-    data: { labels: rows.map((r) => r.name), datasets: [{ label: "Доля ОТП, %", data: rows.map((r) => r.penetration), backgroundColor: rows.map((_, i) => CAT_COLORS[i % CAT_COLORS.length]), borderRadius: 4 }] },
-    options: {
-      indexAxis: "y", responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => {
-        const r = rows[c.dataIndex]; return " доля ОТП " + fmtPct(r.penetration) + " · ОТП " + fmt(r.otp) + " из " + fmt(r.market);
-      } } } },
-      scales: { x: { ticks: { callback: (v) => v.toFixed(1).replace(".", ",") + "%" } }, y: { ticks: { font: { size: 11 } } } },
-    },
-  });
-}
-
 function renderSeasonalityChart() {
   const metric = seasonMetric, canvasId = "seasonalityChart", chartKey = "seasonality";
   const h = state.hist, years = {};
@@ -644,7 +628,7 @@ function renderOpportunityChart() {
         tooltip: { callbacks: { label: (c) => { const p = c.raw; return " " + p.name + ": рынок " + fmt(p.x) + ", доля ОТП " + p.y.toFixed(2).replace(".", ",") + "%, ОТП " + fmt(p.otp) + "  (клик — исключить)"; } } },
       },
       scales: {
-        x: { title: { display: true, text: "Количество запросов (рынок)" }, ticks: { callback: shortNum } },
+        x: { title: { display: true, text: "Количество запросов оверолл" }, ticks: { callback: shortNum } },
         y: { title: { display: true, text: "Доля ОТП, %" }, ticks: { callback: (v) => v.toFixed(1).replace(".", ",") + "%" } },
       },
     },
@@ -704,7 +688,7 @@ function valuePoolData() {
 
 function renderRegionsTable() {
   const q = $("tableFilter").value.trim().toLowerCase();
-  const { rows } = valuePoolData();
+  const rows = [...state.regions].sort((a, b) => b.market - a.market);
   const tbody = $("regionsTable").querySelector("tbody");
   tbody.innerHTML = "";
   rows.filter((r) => !q || r.name.toLowerCase().includes(q)).forEach((r, i) => {
@@ -714,7 +698,6 @@ function renderRegionsTable() {
       `<td class="num">${fmt(r.market)}</td>` +
       `<td class="num tag-otp">${fmt(r.otp)}</td>` +
       `<td class="num"><span class="tag-pen">${fmtPct(r.penetration)}</span></td>` +
-      `<td class="num"><b>${r.pool ? fmt(r.pool) : "—"}</b></td>` +
       `<td class="num">${Math.round(r.affinityIndex || 0)}</td>`;
     tbody.appendChild(tr);
   });
@@ -775,9 +758,10 @@ async function onExport() {
     granularity: $("period").selectedOptions[0].textContent,
     growthMarket: txt("growthMarket") + " (" + txt("growthMarketFoot") + ")",
     growthOtp: txt("growthOtp") + " (" + txt("growthOtpFoot") + ")",
-    sos: txt("sosValue"), sosDelta: txt("sosDelta") + " (" + txt("sosDeltaFoot") + ")",
+    sos: txt("sosValue") + " (" + txt("sosValueFoot") + ")",
     sosWinner: txt("sosLeader") + " (" + txt("sosLeaderFoot") + ")",
-    brandOtp: txt("brandOtpVal") + " (" + txt("brandOtpFoot") + ")",
+    bankTotal: txt("brandTotalVal") + " (" + txt("brandTotalFoot") + ")",
+    bankGrowth: txt("brandGrowthVal") + " (" + txt("brandGrowthFoot") + ")",
     intentLeads: txt("kpiIntent"), intentService: txt("kpiService"),
     intentToxic: txt("kpiChurn"), seasonIdx: txt("kpiSeason"),
   };
@@ -852,7 +836,6 @@ function renderBrandSection() {
     return sum ? (otpRow.series[i] || 0) / sum * 100 : 0;
   });
   const last = sos.length - 1;
-  $("sosValue").textContent = sos[last].toFixed(2).replace(".", ",") + "%";
 
   // Окно сравнения = выбранная гранулярность: месяц / квартал / год.
   const per = periodKey();
@@ -860,12 +843,29 @@ function renderBrandSection() {
   const perLabel = per === "year" ? "за год" : per === "quarter" ? "за квартал" : "за месяц";
   const perCmp = per === "year" ? "г/г" : per === "quarter" ? "кв/кв" : "м/м";
 
-  $("sosDeltaLabel").textContent = "SoS · изменение " + perLabel;
+  // Сумма запросов по топ-5 банкам за окно периода + прирост к прошлому окну.
+  const total = idx.map((i) => rows.reduce((a, r) => a + (r.series[i] || 0), 0));
+  const winSum = (arr, endPos) => {
+    let s = 0;
+    for (let k = 0; k < win; k++) { const p = endPos - k; if (p >= 0) s += arr[p] || 0; }
+    return s;
+  };
+  const tNow = winSum(total, last);
+  const tPrev = idx.length >= win * 2 ? winSum(total, last - win) : 0;
+  $("brandTotalVal").textContent = fmt(tNow);
+  $("brandTotalFoot").textContent = "сумма 5 банков " + perLabel;
+  const gEl = $("brandGrowthVal");
+  if (tPrev) {
+    const g = (tNow - tPrev) / tPrev * 100;
+    gEl.textContent = signPct(g); gEl.className = "stat-value " + (g >= 0 ? "growth-up" : "growth-down");
+  } else { gEl.textContent = "—"; gEl.className = "stat-value"; }
+  $("brandGrowthFoot").textContent = "топ-5 банков · " + perCmp;
+
+  // SoS ОТП: значение + прирост доли голоса за период в подписи.
+  $("sosValue").textContent = sos[last].toFixed(2).replace(".", ",") + "%";
   const dWin = sos.length > win ? sos[last] - sos[last - win] : null;
-  const sd = $("sosDelta");
-  sd.textContent = dWin == null ? "—" : (dWin >= 0 ? "+" : "−") + Math.abs(dWin).toFixed(2).replace(".", ",") + " п.п.";
-  sd.className = "stat-value " + (dWin != null ? (dWin >= 0 ? "growth-up" : "growth-down") : "");
-  $("sosDeltaFoot").textContent = "прирост доли голоса " + perCmp + ", п.п.";
+  $("sosValueFoot").textContent = dWin == null ? "доля голоса"
+    : "доля голоса · " + (dWin >= 0 ? "+" : "−") + Math.abs(dWin).toFixed(2).replace(".", ",") + " п.п. " + perCmp;
 
   // Лидер роста SoS: банк с максимальным приростом доли голоса за период.
   const sharesAt = (pos) => {
@@ -878,24 +878,11 @@ function renderBrandSection() {
     const deltas = nowS.map((v, j) => v - prevS[j]);
     let wi = 0; deltas.forEach((d, j) => { if (d > deltas[wi]) wi = j; });
     $("sosLeader").textContent = rows[wi].brand;
-    $("sosLeaderFoot").textContent = "+" + deltas[wi].toFixed(2).replace(".", ",") + " п.п. SoS " + perLabel +
-      (rows[wi].est ? " · оценка" : "");
+    $("sosLeaderFoot").textContent = "+" + deltas[wi].toFixed(2).replace(".", ",") + " п.п. SoS " + perLabel;
   } else {
     $("sosLeader").textContent = "—";
     $("sosLeaderFoot").textContent = "недостаточно данных " + perLabel;
   }
-
-  // Брендовые запросы ОТП: объём за окно периода + прирост к прошлому окну.
-  const winSum = (endPos) => {
-    let s = 0;
-    for (let k = 0; k < win; k++) { const p = endPos - k; if (p >= 0) s += otpRow.series[idx[p]] || 0; }
-    return s;
-  };
-  const oNow = winSum(idx.length - 1);
-  const oPrev = idx.length >= win * 2 ? winSum(idx.length - 1 - win) : 0;
-  $("brandOtpVal").textContent = fmt(oNow);
-  $("brandOtpFoot").textContent = (win === 1 ? "за " + h.labels[idx[idx.length - 1]] : perLabel + " (посл. " + win + " мес)") +
-    (oPrev ? " · " + signPct((oNow - oPrev) / oPrev * 100) + " " + perCmp : "");
 
   // Чистые деления лог-оси (1/2/5 ×10ⁿ) — иначе подписи наползают друг на друга.
   const LOG_TICKS = [100000, 200000, 500000, 1000000, 2000000, 5000000, 10000000, 20000000];
@@ -989,8 +976,8 @@ function renderQualityKpis() {
   const si = seasonalityIndex(state.hist.otp, state.hist.keys);
   $("kpiSeason").textContent = si ? si.index.toFixed(2).replace(".", ",") + "×" : "—";
   $("kpiSeasonFoot").textContent = si
-    ? "Пиковый месяц («" + si.peak + "») выше среднемесячного спроса ОТП в " + si.index.toFixed(2).replace(".", ",") + " раза. Минимум — «" + si.low + "». Выше индекс — спрос сезоннее."
-    : "Во сколько раз пиковый месяц выше среднемесячного спроса ОТП.";
+    ? "Пиковый месяц («" + si.peak + "») выше среднемесячного объёма запросов ОТП в " + si.index.toFixed(2).replace(".", ",") + " раза - минимум «" + si.low + "»"
+    : "пиковый месяц к среднемесячному объёму запросов ОТП";
 }
 
 // Подписи долей прямо на сегментах stacked-бара (без наведения).
@@ -999,7 +986,7 @@ const stackLabelsPlugin = {
   afterDatasetsDraw(chart) {
     const { ctx } = chart;
     ctx.save();
-    ctx.font = "700 10px Inter, sans-serif";
+    ctx.font = "700 9px Inter, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     chart.data.datasets.forEach((ds, di) => {
@@ -1007,7 +994,9 @@ const stackLabelsPlugin = {
       if (meta.hidden) return;
       meta.data.forEach((bar, i) => {
         const v = ds.data[i];
-        if (v == null || !isFinite(bar.y) || Math.abs(bar.base - bar.y) < 14) return;
+        // Показываем подпись для любого ненулевого сегмента (включая узкий
+        // «токсичный» в последнем месяце): порог по высоте — лишь 8px.
+        if (v == null || v < 0.5 || !isFinite(bar.y) || Math.abs(bar.base - bar.y) < 8) return;
         ctx.fillStyle = ds.lightText ? "#fff" : "#2C3240";
         ctx.fillText(Math.round(v) + "%", bar.x, (bar.y + bar.base) / 2);
       });
@@ -1073,8 +1062,8 @@ function renderMobileChart() {
   charts.mobile = new Chart($("mobileChart"), {
     type: "line",
     data: { labels: h.labels, datasets: [
-      { label: "ОТП · mobile", data: otp, borderColor: C.otp, backgroundColor: C.otpSoft, fill: true, tension: .35, pointRadius: 0, borderWidth: 2.5 },
-      { label: "Рынок · mobile", data: mkt, borderColor: C.market, backgroundColor: "transparent", tension: .35, pointRadius: 0, borderWidth: 2.5 },
+      { label: "ОТП", data: otp, borderColor: C.otp, backgroundColor: C.otpSoft, fill: true, tension: .35, pointRadius: 0, borderWidth: 2.5 },
+      { label: "Рынок", data: mkt, borderColor: C.market, backgroundColor: "transparent", tension: .35, pointRadius: 0, borderWidth: 2.5 },
     ] },
     options: {
       responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
@@ -1129,14 +1118,14 @@ function renderKeyRateChart() {
     ] },
     options: {
       responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
-      plugins: { legend: { position: "top", labels: { boxWidth: 12, font: { weight: 700 } } },
+      plugins: { legend: { display: false },
         tooltip: { callbacks: { label: (c) => c.dataset.yAxisID === "y2"
           ? " ставка: " + c.parsed.y.toFixed(2).replace(".", ",") + "%"
-          : " спрос: " + fmt(c.parsed.y) } } },
+          : " запросы: " + fmt(c.parsed.y) } } },
       scales: {
         x: { ticks: { maxRotation: 50, minRotation: 45, autoSkip: true, font: { size: 10 } } },
-        y: { position: "left", title: { display: true, text: "Спрос", color: C.market }, ticks: { callback: shortNum } },
-        y2: { position: "right", grid: { drawOnChartArea: false }, title: { display: true, text: "Ставка ЦБ", color: "#E8650A" },
+        y: { position: "left", title: { display: true, text: "Запросы", color: C.market }, ticks: { callback: shortNum } },
+        y2: { position: "right", grid: { drawOnChartArea: false }, title: { display: true, text: "Ставка ЦБ, %", color: "#E8650A" },
           ticks: { callback: (v) => v + "%" } },
       },
     },
