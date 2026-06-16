@@ -226,6 +226,13 @@ function renderPeriodViews() {
   renderMobileChart();
   renderKeyRateChart();
   renderRegionsTable();
+  syncMap();
+}
+
+// Передаёт текущее распределение по субъектам в модуль карты (map.js),
+// если он подключён. Карта показывает все регионы (без учёта исключений).
+function syncMap() {
+  if (window.WordstatMap) window.WordstatMap.update(state.regions);
 }
 
 // ---------------------------------------------- агрегация и текущий бакет --
