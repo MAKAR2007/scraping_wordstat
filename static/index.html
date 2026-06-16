@@ -61,6 +61,54 @@
       </form>
     </section>
 
+    <section class="panel compare" id="comparePanel">
+      <div class="panel-head compare-head" id="compareToggle" role="button" tabindex="0" aria-expanded="false">
+        <div>
+          <h2>Сравнение нескольких фраз</h2>
+          <p class="chart-note">Динамика 2–5 запросов на одном графике + выгрузка в Excel</p>
+        </div>
+        <span class="compare-caret" id="compareCaret" aria-hidden="true">▾</span>
+      </div>
+      <div class="compare-body hidden" id="compareBody">
+        <div class="compare-form">
+          <div class="field field--grow">
+            <label for="comparePhrases">Фразы — по одной в строке (2–5)</label>
+            <textarea id="comparePhrases" rows="3" placeholder="Дебетовые карты&#10;Кредитные карты&#10;Расчетный счет"></textarea>
+          </div>
+          <div class="field">
+            <label for="compareMonths">Период</label>
+            <select id="compareMonths">
+              <option value="12">12 месяцев</option>
+              <option value="24" selected>24 месяца</option>
+              <option value="36">36 месяцев</option>
+              <option value="48">48 месяцев</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>&nbsp;</label>
+            <button type="button" id="compareBtn" class="btn btn--primary">Сравнить</button>
+          </div>
+        </div>
+        <div id="compareError" class="error hidden"></div>
+        <div id="compareLoader" class="loader hidden"><span class="spinner"></span> Считаю…</div>
+        <div id="compareResults" class="hidden">
+          <div class="panel-head compare-results-head">
+            <p class="chart-note" id="compareNote"></p>
+            <button type="button" id="compareExportBtn" class="btn btn--export">⬇ Excel</button>
+          </div>
+          <div class="chart-box chart-box--tall"><canvas id="compareChart"></canvas></div>
+          <div class="table-wrap">
+            <table id="compareTable">
+              <thead>
+                <tr><th>Фраза</th><th>Сумма запросов</th><th>Доля</th><th>Динамика</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <div id="error" class="error hidden"></div>
     <div id="dataBanner" class="banner hidden"></div>
     <div id="loader" class="loader hidden"><span class="spinner"></span> Загрузка данных…</div>
@@ -304,5 +352,6 @@
   </footer>
 
   <script src="app.js"></script>
+  <script src="compare.js"></script>
 </body>
 </html>

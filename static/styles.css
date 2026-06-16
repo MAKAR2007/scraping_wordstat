@@ -129,7 +129,7 @@ main { max-width: 1220px; margin: 26px auto 8px; padding: 0 24px; }
 .field { display: flex; flex-direction: column; gap: 7px; min-width: 0; flex: 0 0 auto; }
 .field--grow { flex: 1 1 200px; }
 .field label { font-size: 12px; color: var(--muted); font-weight: 700; letter-spacing: .1px; white-space: nowrap; }
-input, select {
+input, select, textarea {
   font: inherit; font-weight: 600;
   padding: 12px 14px;
   border: 1.5px solid var(--line-2);
@@ -139,7 +139,20 @@ input, select {
 }
 select { cursor: pointer; }
 input::placeholder { color: #aab0bf; font-weight: 500; }
-input:focus, select:focus { border-color: var(--brand); box-shadow: 0 0 0 4px var(--brand-soft); }
+input:focus, select:focus, textarea:focus { border-color: var(--brand); box-shadow: 0 0 0 4px var(--brand-soft); }
+textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
+textarea::placeholder { color: #aab0bf; font-weight: 500; }
+
+/* --- Панель «Сравнение нескольких фраз» --- */
+.compare-head { cursor: pointer; margin-bottom: 0; align-items: center; }
+.compare-caret { font-size: 18px; color: var(--muted); transition: transform .18s; flex: 0 0 auto; }
+.compare-caret.open { transform: rotate(180deg); }
+.compare-body { margin-top: 16px; }
+.compare-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; }
+.compare-results-head { align-items: center; margin: 18px 0 8px; }
+.cmp-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; vertical-align: middle; }
+.cmp-pos { color: var(--brand-dark); font-weight: 700; }
+.cmp-neg { color: #E8467C; font-weight: 700; }
 .search form select { padding: 12px 10px; font-size: 13.5px; }
 .search .btn--primary { padding: 12px 18px; font-size: 14px; }
 
