@@ -22,6 +22,9 @@ apt-get install -y python3-venv python3-pip git nginx curl
 
 echo "==> [2/7] Код из GitHub ($APP_DIR)"
 if [ -d "$APP_DIR/.git" ]; then
+  # Каталог принадлежит www-data, а git мы запускаем от root — без этого
+  # git ругается «dubious ownership» и установщик падает на повторном запуске.
+  git config --global --add safe.directory "$APP_DIR"
   git -C "$APP_DIR" fetch --depth 1 origin main
   git -C "$APP_DIR" reset --hard origin/main
 else

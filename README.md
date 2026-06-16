@@ -134,6 +134,21 @@ journalctl -u wordstat -f      # логи приложения
 systemctl restart wordstat     # перезапуск после правки .env
 ```
 
+### HTTPS на свой домен (бесплатно, Let's Encrypt)
+
+По голому IP сертификат не выдают — нужен домен. Заведите A-запись домена на
+IP сервера, затем на сервере (от root):
+
+```bash
+DOMAIN=stat.example.ru EMAIL=you@example.ru \
+  bash <(curl -fsSL https://raw.githubusercontent.com/MAKAR2007/scraping_wordstat/main/deploy/enable-https.sh)
+```
+
+Скрипт ставит `certbot`, прописывает домен в nginx, получает сертификат,
+включает редирект `http→https`, автопродление (`certbot.timer`) и открывает
+443 в `ufw`. Если своего домена нет — подойдёт бесплатный поддомен
+(например, DuckDNS), он тоже работает с Let's Encrypt и доступен из РФ.
+
 ## Как обеспечивается исключение федеральных округов
 
 В дереве регионов Wordstat структура такая:
