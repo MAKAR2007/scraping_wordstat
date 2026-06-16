@@ -1,0 +1,12 @@
+# Деплой на Amvera Cloud (https://amvera.ru) — открывается в РФ без VPN.
+# Amvera читает этот файл при сборке: ставит зависимости и запускает gunicorn.
+meta:
+  environment: python
+  toolchain:
+    name: pip
+    version: 3.12
+build:
+  requirementsPath: requirements.txt
+run:
+  command: gunicorn app:app --bind 0.0.0.0:80 --workers 2 --timeout 90
+  containerPort: 80
