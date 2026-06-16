@@ -119,7 +119,10 @@ if command -v ufw >/dev/null; then
   ufw --force enable >/dev/null 2>&1 || true
 fi
 
-IP=$(hostname -I | awk '{print $1}')
+# Реальный внешний IP — это src-адрес дефолтного маршрута, а не первый из
+# `hostname -I` (там первым может оказаться docker0 / внутренний интерфейс).
+IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')
+[ -z "$IP" ] && IP=$(hostname -I | awk '{print $1}')
 echo
 echo "================================================================"
 echo "  Готово! Дашборд доступен по адресу:  http://$IP/"

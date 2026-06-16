@@ -54,6 +54,59 @@ python app.py
 
 Требуется роль `search-api.webSearch.user` в Yandex Cloud.
 
+### Если на дашборде синтетические данные (API отвечает 403)
+
+Если бейдж показывает «рабочий режим», но цифры по незнакомым фразам
+выглядят синтетическими — значит вызовы к Wordstat падают с
+`403 Permission denied`, и приложение прозрачно откатывается на локальные
+данные (CSV по продуктам + модель). Проверьте по порядку:
+
+1. **Роль сервис-аккаунта.** Аккаунту, которому принадлежит API-ключ, нужна
+   роль `search-api.webSearch.user` **на том же каталоге**, что указан в
+   `YANDEX_FOLDER_ID` (Console → IAM → права доступа каталога).
+2. **Каталог.** `YANDEX_FOLDER_ID` должен принадлежать тому же облаку, где
+   создан сервис-аккаунт/ключ.
+3. **Биллинг.** К облаку привязан активный платёжный аккаунт (триал не истёк).
+4. **Search API** включён для каталога.
+
+Текст ошибки можно увидеть так (подставьте свои ключ и каталог):
+
+```bash
+curl -s -X POST https://searchapi.api.cloud.yandex.net/v2/wordstat/regions \
+  -H "Authorization: Api-Key $YANDEX_API_KEY" -H "Content-Type: application/json" \
+  -d '{"phrase":"кредит наличными","region":"REGION_REGIONS","folderId":"'"$YANDEX_FOLDER_ID"'"}'
+```
+
+Известные продукты (см. `data/search_queries_v3.csv`) показывают **реальные**
+данные даже без API — они берутся из ручной выгрузки Wordstat.
+
+## Деплой на свой VPS (Ubuntu 22.04/24.04)
+
+Один скрипт ставит Python/nginx, поднимает gunicorn как systemd-сервис и
+проксирует на порт 80. Запускать от root:
+
+```bash
+# демо-режим (реальные данные продуктов из CSV):
+curl -fsSL https://raw.githubusercontent.com/MAKAR2007/scraping_wordstat/main/deploy/setup.sh | bash
+
+# рабочий режим (живой API) — передайте креды переменными:
+YANDEX_API_KEY=AQVN... YANDEX_FOLDER_ID=b1g... \
+  bash -c 'curl -fsSL https://raw.githubusercontent.com/MAKAR2007/scraping_wordstat/main/deploy/setup.sh | bash'
+```
+
+Сайт открывается по `http://<IP-сервера>/` — **без VPN, в том числе из РФ**:
+весь фронтенд (Chart.js, шрифты) отдаётся с самого VPS, обращений к сторонним
+CDN нет. Установщик **идемпотентен**: повторный запуск = обновление до свежего
+кода (`git reset --hard origin/main`), при этом `.env` сохраняется.
+
+Полезное на сервере:
+
+```bash
+systemctl status wordstat      # состояние сервиса
+journalctl -u wordstat -f      # логи приложения
+systemctl restart wordstat     # перезапуск после правки .env
+```
+
 ## Как обеспечивается исключение федеральных округов
 
 В дереве регионов Wordstat структура такая:
