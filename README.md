@@ -80,6 +80,26 @@ curl -s -X POST https://searchapi.api.cloud.yandex.net/v2/wordstat/regions \
 Известные продукты (см. `data/search_queries_v3.csv`) показывают **реальные**
 данные даже без API — они берутся из ручной выгрузки Wordstat.
 
+## Защита входа (логин/пароль)
+
+Публичный сайт по умолчанию **открыт всем**. Чтобы закрыть его, задайте в
+`.env` пароль (HTTP Basic Auth защищает и страницу, и API):
+
+```bash
+APP_USER=otp          # логин (по умолчанию "otp")
+APP_PASSWORD=сильный-пароль
+```
+
+Без `APP_PASSWORD` защита выключена. При деплое можно передать сразу:
+
+```bash
+APP_PASSWORD='секрет' YANDEX_API_KEY=AQVN... YANDEX_FOLDER_ID=b1g... \
+  bash -c 'curl -fsSL https://raw.githubusercontent.com/MAKAR2007/scraping_wordstat/main/deploy/setup.sh | bash'
+```
+
+> ⚠️ На обычном HTTP пароль передаётся в base64 (не шифруется). Для публичного
+> сайта включайте Basic Auth **вместе с HTTPS** — тогда трафик зашифрован.
+
 ## Деплой на свой VPS (Ubuntu 22.04/24.04)
 
 Один скрипт ставит Python/nginx, поднимает gunicorn как systemd-сервис и
