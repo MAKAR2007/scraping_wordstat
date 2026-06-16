@@ -15,12 +15,12 @@ APP_DIR=/opt/wordstat
 REPO=https://github.com/MAKAR2007/scraping_wordstat.git
 PORT=8000
 
-echo "==> [1/6] Системные пакеты"
+echo "==> [1/7] Системные пакеты"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y python3-venv python3-pip git nginx curl
 
-echo "==> [2/6] Код из GitHub ($APP_DIR)"
+echo "==> [2/7] Код из GitHub ($APP_DIR)"
 if [ -d "$APP_DIR/.git" ]; then
   git -C "$APP_DIR" fetch --depth 1 origin main
   git -C "$APP_DIR" reset --hard origin/main
@@ -29,13 +29,33 @@ else
   git clone --depth 1 "$REPO" "$APP_DIR"
 fi
 
-echo "==> [3/6] Виртуальное окружение и зависимости"
+echo "==> [3/7] Виртуальное окружение и зависимости"
 python3 -m venv "$APP_DIR/.venv"
 "$APP_DIR/.venv/bin/pip" install --upgrade pip
 "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt"
-chown -R www-data:www-data "$APP_DIR"
 
-echo "==> [4/6] systemd-сервис gunicorn (127.0.0.1:$PORT)"
+echo "==> [4/7] Файл .env (рабочий режим, если переданы креды)"
+# .env в gitignore и не затирается `git reset --hard`, поэтому однажды
+# созданный — переживает повторные запуски. Если уже есть — не трогаем.
+# Чтобы включить рабочий режим, запусти установщик с переменными:
+#   YANDEX_API_KEY=... YANDEX_FOLDER_ID=... bash setup.sh
+if [ -f "$APP_DIR/.env" ]; then
+  echo "    .env уже существует — оставляю как есть"
+elif [ -n "${YANDEX_API_KEY:-}${YANDEX_IAM_TOKEN:-}" ]; then
+  {
+    [ -n "${YANDEX_API_KEY:-}" ]   && echo "YANDEX_API_KEY=${YANDEX_API_KEY}"
+    [ -n "${YANDEX_IAM_TOKEN:-}" ] && echo "YANDEX_IAM_TOKEN=${YANDEX_IAM_TOKEN}"
+    [ -n "${YANDEX_FOLDER_ID:-}" ] && echo "YANDEX_FOLDER_ID=${YANDEX_FOLDER_ID}"
+  } > "$APP_DIR/.env"
+  echo "    .env создан (рабочий режим)"
+else
+  echo "    креды не переданы — демо-режим (реальные данные продуктов из CSV)"
+fi
+
+chown -R www-data:www-data "$APP_DIR"
+[ -f "$APP_DIR/.env" ] && chmod 600 "$APP_DIR/.env"
+
+echo "==> [5/7] systemd-сервис gunicorn (127.0.0.1:$PORT)"
 cat > /etc/systemd/system/wordstat.service <<UNIT
 [Unit]
 Description=Wordstat OTP dashboard
@@ -56,19 +76,31 @@ systemctl daemon-reload
 systemctl enable wordstat
 systemctl restart wordstat
 
-echo "==> [5/6] nginx reverse proxy на порт 80"
+echo "==> [6/7] nginx reverse proxy на порт 80"
 cat > /etc/nginx/sites-available/wordstat <<'NGINX'
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
     server_name _;
 
+    # gzip для текстовых ответов (HTML/CSS/JS/JSON) — меньше трафика из РФ.
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+    gzip_min_length 1024;
+
+    # Excel-выгрузка может занимать десятки секунд (≈84 запроса к API).
+    client_max_body_size 4m;
+
     location / {
         proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
     }
 }
 NGINX
@@ -78,10 +110,13 @@ rm -f /etc/nginx/sites-enabled/default
 nginx -t
 systemctl restart nginx
 
-echo "==> [6/6] Firewall (если ufw активен — открываем 80, ssh)"
-if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
-  ufw allow 22/tcp  || true
-  ufw allow 80/tcp  || true
+echo "==> [7/7] Firewall (ufw): пускаем SSH + HTTP, затем включаем"
+# Порядок важен: сначала разрешаем 22, потом включаем — иначе можно
+# отрезать себе SSH. --force, чтобы не было интерактивного вопроса.
+if command -v ufw >/dev/null; then
+  ufw allow 22/tcp  >/dev/null 2>&1 || true
+  ufw allow 80/tcp  >/dev/null 2>&1 || true
+  ufw --force enable >/dev/null 2>&1 || true
 fi
 
 IP=$(hostname -I | awk '{print $1}')
