@@ -6,11 +6,12 @@
 субъектам РФ (федеральные округа исключаются) и формирует выгрузку в Excel.
 """
 
+import hmac
 import io
 import os
 import sys
 
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, Response, jsonify, request, send_file
 
 from months import last_n_months
 
@@ -39,6 +40,36 @@ from regions import build_subject_index
 from yandex_client import WordstatClient, YandexError
 
 app = Flask(__name__, static_folder="static", static_url_path="")
+
+# --- Опциональная защита входа (HTTP Basic Auth) ---------------------------
+# Включается переменной окружения APP_PASSWORD. Логин — APP_USER (по умолч.
+# "otp"). Без APP_PASSWORD сайт открыт (демо/локальная разработка). Защищает
+# всё: и статику, и API. На публичном HTTP пароль идёт base64 — закрывайте
+# сайт по HTTPS (см. deploy), чтобы креды не светились в открытом виде.
+_AUTH_USER = os.environ.get("APP_USER", "otp").strip()
+_AUTH_PASS = os.environ.get("APP_PASSWORD", "").strip()
+
+
+def _auth_ok(auth):
+    if not auth or auth.type != "basic":
+        return False
+    # compare_digest — защита от тайминг-атак по подбору логина/пароля.
+    user_ok = hmac.compare_digest(auth.username or "", _AUTH_USER)
+    pass_ok = hmac.compare_digest(auth.password or "", _AUTH_PASS)
+    return user_ok and pass_ok
+
+
+@app.before_request
+def _require_auth():
+    if not _AUTH_PASS:
+        return None  # защита выключена — открытый доступ
+    if _auth_ok(request.authorization):
+        return None
+    return Response(
+        "Требуется авторизация.", 401,
+        {"WWW-Authenticate": 'Basic realm="Wordstat OTP", charset="UTF-8"'},
+    )
+
 
 # Индекс субъектов кэшируется на время жизни процесса.
 _subject_index_cache = {"value": None}

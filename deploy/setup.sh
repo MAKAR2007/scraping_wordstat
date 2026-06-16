@@ -34,20 +34,23 @@ python3 -m venv "$APP_DIR/.venv"
 "$APP_DIR/.venv/bin/pip" install --upgrade pip
 "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt"
 
-echo "==> [4/7] Файл .env (рабочий режим, если переданы креды)"
+echo "==> [4/7] Файл .env (рабочий режим / защита входа, если переданы)"
 # .env в gitignore и не затирается `git reset --hard`, поэтому однажды
 # созданный — переживает повторные запуски. Если уже есть — не трогаем.
-# Чтобы включить рабочий режим, запусти установщик с переменными:
-#   YANDEX_API_KEY=... YANDEX_FOLDER_ID=... bash setup.sh
+# Переменные при запуске установщика:
+#   YANDEX_API_KEY=... YANDEX_FOLDER_ID=...   — рабочий режим (живой API)
+#   APP_PASSWORD=... [APP_USER=...]           — закрыть сайт логином/паролем
 if [ -f "$APP_DIR/.env" ]; then
   echo "    .env уже существует — оставляю как есть"
-elif [ -n "${YANDEX_API_KEY:-}${YANDEX_IAM_TOKEN:-}" ]; then
+elif [ -n "${YANDEX_API_KEY:-}${YANDEX_IAM_TOKEN:-}${APP_PASSWORD:-}" ]; then
   {
     [ -n "${YANDEX_API_KEY:-}" ]   && echo "YANDEX_API_KEY=${YANDEX_API_KEY}"
     [ -n "${YANDEX_IAM_TOKEN:-}" ] && echo "YANDEX_IAM_TOKEN=${YANDEX_IAM_TOKEN}"
     [ -n "${YANDEX_FOLDER_ID:-}" ] && echo "YANDEX_FOLDER_ID=${YANDEX_FOLDER_ID}"
+    [ -n "${APP_USER:-}" ]         && echo "APP_USER=${APP_USER}"
+    [ -n "${APP_PASSWORD:-}" ]     && echo "APP_PASSWORD=${APP_PASSWORD}"
   } > "$APP_DIR/.env"
-  echo "    .env создан (рабочий режим)"
+  echo "    .env создан"
 else
   echo "    креды не переданы — демо-режим (реальные данные продуктов из CSV)"
 fi
