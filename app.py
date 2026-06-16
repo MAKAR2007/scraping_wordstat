@@ -195,6 +195,72 @@ def search():
     })
 
 
+@app.route("/api/compare", methods=["POST"])
+def compare():
+    """Сравнение динамики нескольких фраз (2–5) на одном ряду месяцев.
+
+    Возвращает {labels, keys, series:[{phrase, monthly, total, source}], demo}.
+    Известные продукты в демо-режиме отдают реальные данные из CSV.
+    """
+    import time as _time
+
+    payload = request.get_json(force=True, silent=True) or {}
+    phrases, seen = [], set()
+    for raw in payload.get("phrases") or []:
+        p = (raw or "").strip()
+        low = p.lower()
+        if p and low not in seen:
+            seen.add(low)
+            phrases.append(p)
+    phrases = phrases[:5]
+    if len(phrases) < 2:
+        return jsonify({"error": "Введите минимум 2 разные фразы"}), 400
+
+    devices = payload.get("devices") or None
+    try:
+        n = int(payload.get("months") or 24)
+    except (TypeError, ValueError):
+        n = 24
+    n = max(6, min(n, 48))
+    win = last_n_months(n)
+    keys, labels = win["keys"], win["labels"]
+
+    cooled = _time.time() < _api_down_until["t"]
+    client = WordstatClient(force_demo=cooled)
+
+    series = []
+    for ph in phrases:
+        try:
+            monthly = _compare_series(ph, keys, devices, client)
+        except YandexError:
+            # API упал — уходим в кулдаун и считаем всё остальное локально,
+            # чтобы сравнение не падало целиком из-за одной фразы.
+            _api_down_until["t"] = _time.time() + _API_COOLDOWN
+            client = WordstatClient(force_demo=True)
+            monthly = _compare_series(ph, keys, devices, client)
+        src = "csv" if (client.demo_mode and dataset.lookup(ph)) else (
+            "api" if not client.demo_mode else "synthetic")
+        series.append({"phrase": ph, "monthly": monthly,
+                       "total": int(sum(monthly)), "source": src})
+
+    return jsonify({"labels": labels, "keys": keys, "series": series,
+                    "demo": client.demo_mode})
+
+
+@app.route("/api/compare/export", methods=["POST"])
+def compare_export():
+    """Excel-выгрузка сравнения: один лист (период × фразы) + график."""
+    payload = request.get_json(force=True, silent=True) or {}
+    labels = payload.get("labels") or []
+    series = payload.get("series") or []
+    buffer = _build_compare_workbook(labels, series)
+    return send_file(
+        buffer, as_attachment=True, download_name="wordstat_compare.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument."
+                 "spreadsheetml.sheet",
+    )
+
+
 @app.route("/api/export", methods=["POST"])
 def export_excel():
     """Расширенная выгрузка: Сводка (KPI + выводы), Динамика, Регионы,
@@ -277,6 +343,24 @@ def _phrase_history(phrase, devices, client, index):
     hist = {"keys": keys, "labels": labels, "market": market, "otp": otp}
     year, my, oy = dataset.year_totals_from_series(keys, market, otp)
     return key, base, otp_name, hist, year, my, oy
+
+
+def _compare_series(phrase, keys, devices, client):
+    """Месячный ряд «рынок» по фразе, выровненный по keys.
+
+    Демо + известный продукт → реальный ряд из CSV (с поправкой на устройство);
+    демо + неизвестная фраза → синтетика; рабочий режим → реальный API.
+    """
+    ds_key = dataset.lookup(phrase) if client.demo_mode else None
+    if ds_key:
+        mf, _of = _device_factors(devices)
+        h = dataset.history(ds_key)
+        by = dict(zip(h["keys"], h["market"]))
+        return [int(round(by.get(k, 0) * mf)) for k in keys]
+    if client.demo_mode:
+        mf, _of = _device_factors(devices)
+        return [int(round(v * mf)) for v in client.monthly_history(phrase, keys)]
+    return client.monthly_history(phrase, keys, devices=_api_devices(devices))
 
 
 def _brand_otp_series(client, hist):
@@ -547,6 +631,62 @@ def _build_workbook(p):
         ws6.column_dimensions["A"].width = 10
         for i in range(len(months)):
             ws6.column_dimensions[get_column_letter(i + 2)].width = 11
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+
+def _build_compare_workbook(labels, series):
+    """Книга сравнения фраз: лист «Сравнение» (период × фразы) + итоги + график."""
+    from openpyxl import Workbook
+    from openpyxl.chart import LineChart, Reference
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Сравнение"
+    headers = ["Период"] + [s.get("phrase") or "" for s in series]
+    ws.append(headers)
+    fill = PatternFill("solid", fgColor="52AE30")
+    hfont = Font(bold=True, color="FFFFFF")
+    for c in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=c)
+        cell.fill, cell.font = fill, hfont
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+
+    for i, lab in enumerate(labels):
+        row = [lab]
+        for s in series:
+            m = s.get("monthly") or []
+            row.append(m[i] if i < len(m) else None)
+        ws.append(row)
+
+    data_last = ws.max_row
+    ws.append(["Итого"] + [s.get("total") for s in series])
+    for c in range(1, len(headers) + 1):
+        ws.cell(row=ws.max_row, column=c).font = Font(bold=True)
+
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=2):
+        for cell in row:
+            cell.number_format = "#,##0"
+    ws.column_dimensions["A"].width = 14
+    for i in range(len(series)):
+        ws.column_dimensions[get_column_letter(i + 2)].width = 18
+    ws.freeze_panes = "B2"
+
+    if series and labels:
+        chart = LineChart()
+        chart.title = "Сравнение запросов по фразам"
+        chart.height, chart.width = 11, 26
+        data = Reference(ws, min_col=2, max_col=1 + len(series),
+                         min_row=1, max_row=data_last)
+        cats = Reference(ws, min_col=1, min_row=2, max_row=data_last)
+        chart.add_data(data, titles_from_data=True)
+        chart.set_categories(cats)
+        ws.add_chart(chart, get_column_letter(len(series) + 3) + "2")
 
     buffer = io.BytesIO()
     wb.save(buffer)
