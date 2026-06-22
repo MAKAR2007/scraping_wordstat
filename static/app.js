@@ -14,7 +14,8 @@ let charts = {};
 let topLimit = 15;
 let excluded = new Set();   // id субъектов, исключённых из части графиков
 let regionRank = "market";  // ранжирование распределения: market | penetration
-let pieMetric = "otp";      // пайчарт: otp | market
+let pieMetric = "market";   // пайчарт: market | otp (Рынок слева — по умолчанию)
+let keyRateMap = null;      // помесячная ставка ЦБ РФ из /api/keyrate (или null)
 let seasonMetric = "market";// сезонность: market | otp
 let keyRateMetric = "market"; // запросы на графике ставки: market | otp
 let growthStart = 0;        // индекс стартовой точки темпа роста (=100)
@@ -108,6 +109,15 @@ document.addEventListener("DOMContentLoaded", () => {
   bindToggle("pieToggle", (d) => { pieMetric = d.metric; renderShareChart(); });
   bindToggle("seasonToggle", (d) => { seasonMetric = d.metric; renderSeasonalityChart(); });
   bindToggle("keyRateToggle", (d) => { keyRateMetric = d.metric; renderKeyRateChart(); });
+
+  // Актуальная ключевая ставка ЦБ РФ — подгружается автоматически (с кэшем на
+  // сервере). Если уже есть результат поиска — перерисовываем график ставки.
+  fetch("/api/keyrate").then((r) => r.json()).then((d) => {
+    if (d && d.rates && Object.keys(d.rates).length) {
+      keyRateMap = d.rates;
+      if (state.marketPhrase) renderKeyRateChart();
+    }
+  }).catch(() => {});
 });
 
 // ------------------------------------------- диапазон дат (с .. по) -------
@@ -168,12 +178,16 @@ async function onSearch(e) {
     state.dynRegion = "ALL";
     excluded.clear();
     setupRangeInputs();
+    // ВАЖНО: показываем результаты ДО отрисовки графиков — иначе Chart.js
+    // создаёт canvas в скрытом контейнере с нулевым размером, и на части
+    // машин (Windows/Chrome, широкоформатные/4K) координаты ховера потом
+    // «съезжают». Видимый контейнер = корректный размер canvas сразу.
+    $("results").classList.remove("hidden");
     applyRange(false);          // hist = срез fullHist по выбранным датам
     renderBanner();
     populateRegionSelect();
     renderExcludeChips();
     renderAll();
-    $("results").classList.remove("hidden");
   } catch (err) {
     showError(err.message);
   } finally {
@@ -227,6 +241,12 @@ function renderPeriodViews() {
   renderKeyRateChart();
   renderRegionsTable();
   syncMap();
+  // После того как раскладка устоялась (появился/исчез скроллбар, сменился DPR),
+  // пере-синхронизируем размер canvas всех графиков — чтобы ховер/тултипы были
+  // точны на любом мониторе и в любом браузере.
+  requestAnimationFrame(() => {
+    Object.values(charts).forEach((c) => { try { if (c) c.resize(); } catch (e) { /* noop */ } });
+  });
 }
 
 // Передаёт текущее распределение по субъектам в модуль карты (map.js),
@@ -280,27 +300,26 @@ function aggByPeriod(values, period, mode = "sum", keys = state.hist.keys) {
   };
 }
 
-// Подписи следующих h периодов после lastKey ("YYYY-MM").
-function nextPeriodLabels(lastKey, h, period) {
-  let y = +lastKey.slice(0, 4), m = +lastKey.slice(5, 7);
-  const out = [];
-  if (period === "year") { for (let i = 0; i < h; i++) { y++; out.push(String(y)); } return out; }
-  if (period === "quarter") {
-    let q = Math.ceil(m / 3);
-    for (let i = 0; i < h; i++) { q++; if (q > 4) { q = 1; y++; } out.push(q + " кв. " + y); }
-    return out;
-  }
-  return nextMonthLabels(lastKey, h);
-}
-
-function currentBucket() {
-  const period = periodKey();
-  const agg = aggregate(state.hist, period);
-  const need = period === "year" ? 12 : period === "quarter" ? 3 : 1;
-  const full = [];
-  for (let i = 0; i < agg.counts.length; i++) if (agg.counts[i] >= need) full.push(i);
-  const li = full.length ? full[full.length - 1] : agg.market.length - 1;
-  return { agg, full, li, period, M: li >= 0 ? agg.market[li] : 0, O: li >= 0 ? agg.otp[li] : 0, label: li >= 0 ? agg.labels[li] : "—" };
+// Все KPI-плитки и распределение по регионам считаются ЗА ВЕСЬ анализируемый
+// период (срез state.hist), а гранулярность влияет только на разметку осей
+// графиков — поэтому здесь суммируем по всему периоду, без бакетов.
+function periodTotals() {
+  const h = state.hist;
+  const M = h.market.reduce((a, b) => a + (b || 0), 0);
+  const O = h.otp.reduce((a, b) => a + (b || 0), 0);
+  // «Динамика за период» = изменение от первого к последнему месяцу периода
+  // (не зависит от выбранной гранулярности).
+  const growth = (arr) => {
+    const f = arr.find((v) => v > 0);
+    const l = arr.length ? arr[arr.length - 1] : null;
+    return (f && l != null) ? (l - f) / f * 100 : null;
+  };
+  const fi = h.market.findIndex((v) => v > 0);
+  return {
+    M, O, share: M ? O / M * 100 : 0,
+    growthM: growth(h.market), growthO: growth(h.otp),
+    firstLabel: h.labels[fi >= 0 ? fi : 0] || "", lastLabel: h.labels[h.labels.length - 1] || "",
+  };
 }
 
 // ------------------------------------ детерминированное распределение по РФ --
@@ -325,19 +344,13 @@ function fixSumClamped(arr, target, caps) {
   }
 }
 
-// Концентрация спроса реагирует на устройство и период анализа через gamma-
-// преобразование весов. Год+«Все устройства» = эталон (Москва ~14,9%, столбцы
-// не искажены); короткие периоды и десктоп — концентрированнее.
-function deviceGamma() {
-  return ({ DEVICE_ALL: 1, DEVICE_DESKTOP: 1.18, DEVICE_PHONE: 0.9, DEVICE_TABLET: 1.06 })[$("device").value] || 1;
-}
-function periodGamma() {
-  return ({ year: 1, quarter: 1.05, month: 1.1 })[periodKey()] || 1;
-}
-function concentrationGamma() { return deviceGamma() * periodGamma(); }
+// Распределение по регионам берётся напрямую из API (срез по устройству уже
+// учтён сервером), а гранулярность на него не влияет — поэтому без gamma-
+// искажений: веса субъектов используются как есть.
+function concentrationGamma() { return 1; }
 function visibleRegions() { return state.regions.filter((r) => !excluded.has(r.id)); }
 
-// Распределение тотала РФ по субъектам по РЕАЛЬНЫМ весам (население/спрос):
+// Распределение тотала РФ по субъектам по РЕАЛЬНЫМ весам из API (запрос):
 // Москва — №1 (~15%), пропорции стабильны, период лишь масштабирует объёмы.
 // ОТП по региону ∝ рынку с умеренной детерминированной вариацией доли.
 function computeRegions(subjects, M, O) {
@@ -365,9 +378,9 @@ function computeRegions(subjects, M, O) {
 }
 
 function recomputeRegions() {
-  const b = currentBucket();
-  state.bucketLabel = b.label;
-  state.regions = computeRegions(state.subjects, b.M, b.O);
+  const t = periodTotals();
+  state.bucketLabel = "период";
+  state.regions = computeRegions(state.subjects, t.M, t.O);
 }
 
 function regionFractions(regionId) {
@@ -402,23 +415,21 @@ function currentDynHist() {
 
 // --------------------------------------------------------------- KPI ряды --
 function renderKpi() {
-  const b = currentBucket();
-  const market = b.M, otp = b.O, share = market ? otp / market * 100 : 0;
-  $("statMarket").textContent = fmt(market);
-  $("statMarketFoot").textContent = "за " + b.label;
-  $("statOtpShare").textContent = share.toFixed(3).replace(".", ",") + "%";
-  $("statOtpFoot").textContent = "за " + b.label;
-  $("regionsPeriodNote").textContent = "за " + b.label;
+  const t = periodTotals();
+  $("statMarket").textContent = fmt(t.M);
+  $("statMarketFoot").textContent = "за период";
+  $("statOtpShare").textContent = t.share.toFixed(3).replace(".", ",") + "%";
+  $("statOtpFoot").textContent = "за период";
+  $("regionsPeriodNote").textContent = "за период";
 
-  [["Market", "market"], ["Otp", "otp"]].forEach(([suf, field]) => {
+  [["Market", "growthM"], ["Otp", "growthO"]].forEach(([suf, field]) => {
     const el = $("growth" + suf), foot = $("growth" + suf + "Foot");
-    if (b.full.length < 2 || !b.agg[field][b.full[b.full.length - 2]]) {
+    const g = t[field];
+    if (g == null) {
       el.textContent = "—"; el.className = "stat-value"; foot.textContent = "недостаточно данных"; return;
     }
-    const i1 = b.full[b.full.length - 2], i2 = b.full[b.full.length - 1];
-    const pct = (b.agg[field][i2] - b.agg[field][i1]) / b.agg[field][i1] * 100;
-    el.textContent = signPct(pct); el.className = "stat-value " + (pct >= 0 ? "growth-up" : "growth-down");
-    foot.textContent = b.agg.labels[i2] + " к " + b.agg.labels[i1];
+    el.textContent = signPct(g); el.className = "stat-value " + (g >= 0 ? "growth-up" : "growth-down");
+    foot.textContent = t.firstLabel + " → " + t.lastLabel;
   });
 }
 
@@ -549,74 +560,27 @@ function renderGrowthIndexChart() {
   });
 }
 
-// Сглаживание Хольта с демпфированным трендом (экспоненциальное сглаживание
-// уровня и тренда) — устойчивее линейной регрессии на коротком горизонте.
-function holtDamped(y, h, alpha = 0.45, beta = 0.22, phi = 0.9) {
-  const n = y.length;
-  if (n < 3) { const last = y[n - 1] || 0; return { fc: new Array(h).fill(last), sigma: 0 }; }
-  let level = y[0], trend = y[1] - y[0];
-  const fitted = [];
-  for (let i = 1; i < n; i++) {
-    const prev = level, fhat = level + phi * trend;
-    fitted.push(fhat);
-    level = alpha * y[i] + (1 - alpha) * fhat;
-    trend = beta * (level - prev) + (1 - beta) * phi * trend;
-  }
-  let ss = 0, c = 0;
-  for (let i = 1; i < n; i++) { const e = y[i] - fitted[i - 1]; if (isFinite(e)) { ss += e * e; c++; } }
-  const sigma = Math.sqrt(ss / Math.max(1, c - 1)) || 0;
-  const fc = []; let acc = 0, pk = 1;
-  for (let k = 1; k <= h; k++) { pk *= phi; acc += pk; fc.push(level + acc * trend); }
-  return { fc, sigma };
-}
-
-function computeForecastData() {
-  // Ряд доли ОТП строится на выбранной гранулярности; горизонт прогноза:
-  // месяц — 6 мес, квартал — 1 квартал, год — 1 год.
+// Динамика доли запросов ОТП за период (otp ÷ рынок, %), бакетируется по
+// выбранной гранулярности (только разметка оси X).
+function renderForecastChart() {
   const per = periodKey();
   const aggM = aggByPeriod(state.hist.market, per), aggO = aggByPeriod(state.hist.otp, per);
-  const share = aggM.values.map((m, i) => (m ? aggO.values[i] / m * 100 : 0));
-  const keys = aggM.keys;
-  const n = share.length;
-  const K = per === "month" ? 6 : per === "quarter" ? 1 : 1, z = 1.28;   // ~80% интервал
-  const lastK = per === "month" ? Math.min(24, n) : n, start = n - lastK;
-  const histLabels = aggM.labels.slice(start), histShare = share.slice(start);
-  const { fc, sigma } = holtDamped(histShare, K);
-  const futLabels = nextPeriodLabels(keys[n - 1], K, per);
-  const labels = histLabels.concat(futLabels);
-  const actual = histShare.concat(new Array(K).fill(null));
-  const lastVal = histShare[histShare.length - 1];
-  const pad = new Array(histShare.length - 1).fill(null);
-  const base = pad.concat([lastVal]), opt = pad.concat([lastVal]), pess = pad.concat([lastVal]);
-  for (let k = 1; k <= K; k++) {
-    const spread = z * sigma * Math.sqrt(k);
-    base.push(Math.max(0, fc[k - 1]));
-    opt.push(Math.max(0, fc[k - 1] + spread));
-    pess.push(Math.max(0, fc[k - 1] - spread));
-  }
-  return { labels, actual, base, opt, pess };
-}
-
-function renderForecastChart() {
-  const { labels, actual, base, opt, pess } = computeForecastData();
+  const share = aggM.values.map((m, i) => (m ? aggO.values[i] / m * 100 : null));
   destroy("forecast");
   charts.forecast = new Chart($("forecastChart"), {
     type: "line",
     data: {
-      labels,
+      labels: aggM.labels,
       datasets: [
-        { label: "Факт", data: actual, borderColor: C.otp, backgroundColor: C.otpSoft, fill: true, tension: .3, pointRadius: 0, borderWidth: 2.5 },
-        { label: "Оптимистичный", data: opt, borderColor: "#18a558", borderDash: [4, 4], backgroundColor: "transparent", fill: false, tension: .25, pointRadius: 0, borderWidth: 1.8 },
-        { label: "_band", data: pess, borderColor: "transparent", backgroundColor: "rgba(120,130,150,.12)", fill: 1, tension: .25, pointRadius: 0 },
-        { label: "Базовый", data: base, borderColor: C.orange, borderDash: [6, 5], backgroundColor: "transparent", fill: false, tension: .25, pointRadius: 0, borderWidth: 2.6 },
-        { label: "Пессимистичный", data: pess, borderColor: "#e23b2e", borderDash: [4, 4], backgroundColor: "transparent", fill: false, tension: .25, pointRadius: 0, borderWidth: 1.8 },
+        { label: "Доля ОТП", data: share, borderColor: C.otp, backgroundColor: C.otpSoft,
+          fill: true, tension: .3, pointRadius: 0, borderWidth: 2.5, spanGaps: true },
       ],
     },
     options: {
       responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
       plugins: {
-        legend: { display: true, position: "top", labels: { boxWidth: 12, font: { weight: 700 }, filter: (it) => !it.text.startsWith("_") } },
-        tooltip: { callbacks: { label: (c) => (c.parsed.y == null || c.dataset.label.startsWith("_")) ? "" : " " + c.dataset.label + ": " + c.parsed.y.toFixed(3).replace(".", ",") + "%" } },
+        legend: { display: false },
+        tooltip: { callbacks: { label: (c) => c.parsed.y == null ? "" : " Доля ОТП: " + c.parsed.y.toFixed(3).replace(".", ",") + "%" } },
       },
       scales: {
         x: { ticks: { maxRotation: 50, minRotation: 45, autoSkip: true, font: { size: 10 } } },
@@ -626,37 +590,19 @@ function renderForecastChart() {
   });
 }
 
+// Сезонность: разметка ВСЕГДА по месяцам (12 по оси X), независимо от
+// выбранной гранулярности. Каждая линия — отдельный календарный год.
 function renderSeasonalityChart() {
   const metric = seasonMetric, canvasId = "seasonalityChart", chartKey = "seasonality";
-  const h = state.hist, per = periodKey();
+  const h = state.hist;
   destroy(chartKey);
 
-  // Год: «сезонности внутри года» нет — показываем годовые итоги одной линией.
-  if (per === "year") {
-    const agg = aggByPeriod(h[metric], "year");
-    charts[chartKey] = new Chart($(canvasId), {
-      type: "line",
-      data: { labels: agg.labels, datasets: [{ label: metric === "otp" ? "ОТП" : "Рынок",
-        data: agg.values, borderColor: metric === "otp" ? C.otp : C.market,
-        backgroundColor: metric === "otp" ? C.otpSoft : C.marketSoft, fill: true, tension: .35, pointRadius: 3, borderWidth: 2.8 }] },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => " " + fmt(c.parsed.y) + " запросов" } } },
-        scales: { y: { ticks: { callback: shortNum } } },
-      },
-    });
-    return;
-  }
-
-  // Месяц/квартал: каждая линия — год, по оси X месяцы (12) или кварталы (4).
-  const slots = per === "quarter" ? 4 : 12;
-  const xLabels = per === "quarter" ? ["1 кв.", "2 кв.", "3 кв.", "4 кв."] : MONTH_ABBR;
+  const xLabels = MONTH_ABBR;
   const years = {};
   h.keys.forEach((k, i) => {
     const y = k.slice(0, 4), m = parseInt(k.slice(5, 7), 10) - 1;
-    const slot = per === "quarter" ? Math.floor(m / 3) : m;
-    const row = years[y] = years[y] || new Array(slots).fill(null);
-    if (h[metric][i] != null) row[slot] = (row[slot] || 0) + h[metric][i];
+    const row = years[y] = years[y] || new Array(12).fill(null);
+    if (h[metric][i] != null) row[m] = (row[m] || 0) + h[metric][i];
   });
   const recent = Object.keys(years).sort().slice(-6);
   const datasets = recent.map((y, idx) => ({
@@ -828,13 +774,12 @@ function renderExcludeChips() {
 async function onExport() {
   const btn = $("exportBtn");
   btn.disabled = true; const label = btn.textContent; btn.textContent = "…";
-  // Снимок дашборда в текущем состоянии (с учётом диапазона дат и
-  // гранулярности): KPI, динамика, регионы с Value Pool, бренды банков,
-  // прогноз, сезонность и интенты.
-  const b = currentBucket();
+  // Снимок дашборда в текущем состоянии (за анализируемый период): KPI,
+  // динамика, регионы с Value Pool, бренды банков, сезонность и интенты.
+  const t = periodTotals();
   const txt = (id) => $(id).textContent.trim();
   const kpi = {
-    periodLabel: b.label, market: b.M, otp: b.O, share: b.M ? b.O / b.M * 100 : 0,
+    periodLabel: "за период", market: t.M, otp: t.O, share: t.share,
     range: (state.hist.labels[0] || "") + " — " + (state.hist.labels[state.hist.labels.length - 1] || ""),
     granularity: $("period").selectedOptions[0].textContent,
     growthMarket: txt("growthMarket") + " (" + txt("growthMarketFoot") + ")",
@@ -863,7 +808,6 @@ async function onExport() {
         // Брендовые запросы банков (как в SoS-блоке): ОТП — реальный ряд,
         // конкуренты — оценка; ряды выровнены по месяцам dynamics.
         competitors: (brandSeries() || []).map((r) => ({ brand: r.brand, series: r.series })),
-        forecast: computeForecastData(),
         seasonality: { years: sm.years, months: MONTH_ABBR, market: sm.matrix, otp: so.matrix },
         intents,
       }),
@@ -878,7 +822,7 @@ async function onExport() {
 }
 
 // ------------------------------------------- бренды банков и SoS ----------
-// База брендового спроса конкурентов — оценка по публичным порядкам Wordstat
+// База брендовых запросов конкурентов — оценка по публичным порядкам Wordstat
 // («сбербанк» ≫ «т-банк» > «альфа банк» ≈ «втб» ≫ «отп банк»). Ряд ОТП — реальный.
 const BANK_BRANDS = [
   { brand: "Сбер", base: 11500000, growth: 0.05 },
@@ -907,12 +851,8 @@ function renderBrandSection() {
   if (!rows) { eyebrow.classList.add("hidden"); sect.classList.add("hidden"); return; }
   eyebrow.classList.remove("hidden"); sect.classList.remove("hidden");
 
-  // Гранулярность: ряды банков агрегируются в бакеты периода (м/кв/год),
-  // сравнение «за период» = соседние бакеты.
   const per = periodKey();
-  const perLabel = per === "year" ? "за год" : per === "quarter" ? "за квартал" : "за месяц";
-  const perCmp = per === "year" ? "г/г" : per === "quarter" ? "кв/кв" : "м/м";
-
+  // --- Графики: ряды банков по бакетам выбранной гранулярности (только ось X) ---
   const otpRow = rows.find((r) => r.brand === "ОТП");
   const otpAgg = aggByPeriod(otpRow.series, per);
   const valid = otpAgg.values.map((v, i) => (v != null && v > 0 ? i : -1)).filter((i) => i >= 0);
@@ -924,37 +864,42 @@ function renderBrandSection() {
   const otpVals = bankAgg.find((r) => r.brand === "ОТП").vals;
   const total = labels.map((_, j) => bankAgg.reduce((a, r) => a + r.vals[j], 0));
   const sos = labels.map((_, j) => (total[j] ? otpVals[j] / total[j] * 100 : 0));
-  const last = labels.length - 1;
-  const prev = last - 1;
 
-  // Плитка 1: запросы топ-5 банков за период. Плитка 2: прирост к прошлому.
-  const tNow = total[last] || 0, tPrev = prev >= 0 ? total[prev] : 0;
-  $("brandTotalVal").textContent = fmt(tNow);
-  $("brandTotalFoot").textContent = "сумма 5 банков " + perLabel;
+  // --- Плитки: считаются ЗА ВЕСЬ период по помесячным рядам (гранулярность
+  // на них не влияет) ---
+  const monthsN = otpRow.series.length;
+  const totMonthly = [];
+  for (let j = 0; j < monthsN; j++) totMonthly.push(rows.reduce((a, r) => a + (r.series[j] || 0), 0));
+  const sumAll = totMonthly.reduce((a, b) => a + b, 0);
+  const sumOtp = otpRow.series.reduce((a, b) => a + (b || 0), 0);
+  const fi = totMonthly.findIndex((v) => v > 0), liM = monthsN - 1;
+
+  // Плитка 1: суммарные запросы топ-5 банков за период.
+  $("brandTotalVal").textContent = fmt(sumAll);
+  $("brandTotalFoot").textContent = "сумма 5 банков за период";
+  // Плитка 2: динамика запросов банков за период (первый → последний месяц).
   const gEl = $("brandGrowthVal");
-  if (tPrev) {
-    const g = (tNow - tPrev) / tPrev * 100;
+  if (fi >= 0 && totMonthly[fi]) {
+    const g = (totMonthly[liM] - totMonthly[fi]) / totMonthly[fi] * 100;
     gEl.textContent = signPct(g); gEl.className = "stat-value " + (g >= 0 ? "growth-up" : "growth-down");
   } else { gEl.textContent = "—"; gEl.className = "stat-value"; }
-  $("brandGrowthFoot").textContent = "топ-5 банков · " + perCmp;
+  $("brandGrowthFoot").textContent = "топ-5 банков за период";
 
-  // Плитка 3: SoS ОТП + прирост доли голоса за период.
-  $("sosValue").textContent = (sos[last] || 0).toFixed(2).replace(".", ",") + "%";
-  const dWin = prev >= 0 ? sos[last] - sos[prev] : null;
-  $("sosValueFoot").textContent = dWin == null ? "доля голоса"
-    : "доля голоса · " + (dWin >= 0 ? "+" : "−") + Math.abs(dWin).toFixed(2).replace(".", ",") + " п.п. " + perCmp;
+  // Плитка 3: SoS ОТП за период (сумма ОТП ÷ сумма всех банков).
+  $("sosValue").textContent = (sumAll ? sumOtp / sumAll * 100 : 0).toFixed(2).replace(".", ",") + "%";
+  $("sosValueFoot").textContent = "доля голоса за период";
 
-  // Плитка 4: лидер роста SoS — банк с макс. приростом доли голоса за период.
-  const sharesAt = (j) => bankAgg.map((r) => (total[j] ? r.vals[j] / total[j] * 100 : 0));
-  if (prev >= 0) {
-    const nowS = sharesAt(last), prevS = sharesAt(prev);
-    const deltas = nowS.map((v, k) => v - prevS[k]);
+  // Плитка 4: лидер роста SoS — макс. прирост доли голоса от начала к концу периода.
+  const sosAt = (j) => rows.map((r) => (totMonthly[j] ? (r.series[j] || 0) / totMonthly[j] * 100 : 0));
+  if (fi >= 0 && fi < liM) {
+    const nowS = sosAt(liM), firstS = sosAt(fi);
+    const deltas = nowS.map((v, k) => v - firstS[k]);
     let wi = 0; deltas.forEach((d, k) => { if (d > deltas[wi]) wi = k; });
-    $("sosLeader").textContent = bankAgg[wi].brand;
-    $("sosLeaderFoot").textContent = "+" + deltas[wi].toFixed(2).replace(".", ",") + " п.п. SoS " + perLabel;
+    $("sosLeader").textContent = rows[wi].brand;
+    $("sosLeaderFoot").textContent = (deltas[wi] >= 0 ? "+" : "−") + Math.abs(deltas[wi]).toFixed(2).replace(".", ",") + " п.п. SoS за период";
   } else {
     $("sosLeader").textContent = "—";
-    $("sosLeaderFoot").textContent = "недостаточно данных " + perLabel;
+    $("sosLeaderFoot").textContent = "недостаточно данных";
   }
 
   // Границы и деления лог-оси — динамические по данным и по «красивым»
@@ -1010,8 +955,8 @@ function renderBrandSection() {
   });
 }
 
-// ------------------------------------- качество спроса: интенты, TQI, mobile --
-// Демо-модель распределения брендового спроса по интентам (в рабочем режиме
+// ------------------------------------- качество запросов: интенты, TQI, mobile --
+// Демо-модель распределения брендовых запросов по интентам (в рабочем режиме
 // считается по реальным фразам из topRequests).
 function intentSplit() {
   const o = state.hist.otp, n = o.length;
@@ -1060,7 +1005,10 @@ function renderQualityKpis() {
   $("kpiService").textContent = pct(sv);
   $("kpiChurn").textContent = pct(tx);
 
-  const si = seasonalityIndex(state.hist.otp, state.hist.keys);
+  // За период, а если данных мало (короткий диапазon) — по всей истории,
+  // чтобы индекс считался всегда, а не показывал «—».
+  const si = seasonalityIndex(state.hist.otp, state.hist.keys)
+    || seasonalityIndex(state.fullHist.otp, state.fullHist.keys);
   $("kpiSeason").textContent = si ? si.index.toFixed(2).replace(".", ",") + "×" : "—";
   $("kpiSeasonFoot").textContent = si
     ? "Пиковый месяц («" + si.peak + "») выше среднемесячного объёма запросов ОТП в " + si.index.toFixed(2).replace(".", ",") + " раза - минимум «" + si.low + "»"
@@ -1192,6 +1140,14 @@ const KEY_RATE_BY_YEAR = {
 };
 
 function keyRateSeries(keys) {
+  // Рабочий источник — актуальная ставка ЦБ (keyRateMap из /api/keyrate);
+  // запасной — встроенная таблица, если CBR недоступен.
+  if (keyRateMap) {
+    return keys.map((k) => {
+      const v = keyRateMap[k.slice(0, 7)];
+      return v == null ? null : v;
+    });
+  }
   return keys.map((k) => {
     const a = KEY_RATE_BY_YEAR[+k.slice(0, 4)];
     return a ? a[+k.slice(5, 7) - 1] : null;
@@ -1244,7 +1200,7 @@ function renderKeyRateChart() {
   });
 }
 
-// ------------------------------------------------- тепловая карта спроса --
+// ------------------------------------------------- тепловая карта запросов --
 function seasonalityMatrix(metric) {
   const h = state.hist, years = {};
   h.keys.forEach((k, i) => {
@@ -1259,12 +1215,6 @@ function seasonalityMatrix(metric) {
 function hexA(hex, a) {
   const n = parseInt(hex.slice(1), 16);
   return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")";
-}
-function nextMonthLabels(lastKey, k) {
-  let y = parseInt(lastKey.slice(0, 4), 10), m = parseInt(lastKey.slice(5, 7), 10);
-  const out = [];
-  for (let i = 0; i < k; i++) { m++; if (m > 12) { m = 1; y++; } out.push(MONTH_ABBR[m - 1] + " " + y); }
-  return out;
 }
 function shortNum(n) {
   n = Number(n) || 0;

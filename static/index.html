@@ -167,8 +167,8 @@
       <section class="panel">
         <div class="panel-head">
           <div>
-            <h2>Карта спроса по субъектам РФ</h2>
-            <p class="chart-note">Интенсивность цвета — объём запросов в регионе · <span id="mapLegendMax"></span></p>
+            <h2>Карта запросов по субъектам РФ</h2>
+            <p class="chart-note">Интенсивность цвета — объём запросов в регионе</p>
           </div>
           <div class="toggle" id="mapToggle">
             <button class="toggle-btn active" data-metric="market">Рынок</button>
@@ -176,10 +176,11 @@
           </div>
         </div>
         <div id="regionMap" class="region-map"></div>
+        <div id="mapLegend" class="map-legend"></div>
       </section>
 
       <section class="panel">
-        <h2>Доля запросов ОТП и сценарный прогноз на 6 месяцев</h2>
+        <h2>Динамика доли запросов ОТП</h2>
         <div class="chart-box"><canvas id="forecastChart"></canvas></div>
       </section>
 
@@ -253,7 +254,7 @@
             <div class="chart-box"><canvas id="brandDemandChart"></canvas></div>
           </section>
           <section class="panel">
-            <h2>Доля голоса ОТП среди банков (SoS)</h2>
+            <h2>Доля голоса ОТП среди топ-5 банков (SoS)</h2>
             <div class="chart-box"><canvas id="sosChart"></canvas></div>
           </section>
         </div>
@@ -327,11 +328,11 @@
         <section class="panel">
           <div class="panel-head">
             <div>
-              <h2>Топ-10 регионов по запросам</h2>
+              <h2>Структура запросов в разрезе регионов</h2>
             </div>
             <div class="toggle" id="pieToggle">
-              <button class="toggle-btn active" data-metric="otp">ОТП</button>
-              <button class="toggle-btn" data-metric="market">Рынок</button>
+              <button class="toggle-btn active" data-metric="market">Рынок</button>
+              <button class="toggle-btn" data-metric="otp">ОТП</button>
             </div>
           </div>
           <div class="chart-box chart-box--pie"><canvas id="shareChart"></canvas></div>
