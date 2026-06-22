@@ -154,8 +154,15 @@ textarea::placeholder { color: #aab0bf; font-weight: 500; }
 .cmp-pos { color: var(--brand-dark); font-weight: 700; }
 .cmp-neg { color: #E8467C; font-weight: 700; }
 
-/* --- Карта спроса по субъектам РФ (choropleth, собственный SVG) --- */
+/* --- Карта запросов по субъектам РФ (choropleth, собственный SVG) --- */
 .region-map { position: relative; width: 100%; }
+.map-legend { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.map-legend-cap { font-size: 12px; color: var(--muted); font-weight: 600; }
+.map-legend-bar {
+  width: 180px; height: 12px; border-radius: 6px;
+  background: linear-gradient(90deg, #EFF6E2 0%, #7AB829 50%, #2F5212 100%);
+  border: 1px solid var(--line-2);
+}
 .ru-map { width: 100%; height: auto; display: block; }
 .ru-map path { transition: fill .15s, opacity .15s; cursor: pointer; }
 .ru-map path:hover { opacity: .82; stroke: var(--ink); stroke-width: 1; }

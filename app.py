@@ -109,12 +109,35 @@ def products():
     return jsonify({"phrases": dataset.known_phrases()})
 
 
+# Ключевая ставка ЦБ РФ — автоподгрузка с cbr.ru, кэш на процесс.
+_keyrate_cache = {"t": 0.0, "rates": None}
+_KEYRATE_TTL = 6 * 3600
+
+
+@app.route("/api/keyrate")
+def keyrate():
+    """Помесячная ключевая ставка ЦБ РФ (на конец месяца), автоматически с CBR."""
+    import time as _time
+    now = _time.time()
+    if not _keyrate_cache["rates"] or now - _keyrate_cache["t"] > _KEYRATE_TTL:
+        rates = _fetch_cbr_keyrate()
+        if rates:
+            _keyrate_cache["rates"] = rates
+            _keyrate_cache["t"] = now
+    rates = _keyrate_cache["rates"]
+    return jsonify({"rates": rates or {}, "source": "cbr" if rates else "none"})
+
+
 @app.route("/api/search", methods=["POST"])
 def search():
     payload = request.get_json(force=True, silent=True) or {}
     phrase = (payload.get("phrase") or "").strip()
     if not phrase:
         return jsonify({"error": "Не задана ключевая фраза"}), 400
+    # Если пользователь сам дописал «ОТП» (например «Дебетовые карты ОТП»),
+    # отрезаем — рыночная фраза идёт в API без него, а брендовая строится как
+    # «<фраза> ОТП». Иначе к API улетело бы «… ОТП ОТП» и всё поехало бы.
+    phrase = _strip_otp_suffix(phrase)
 
     devices = payload.get("devices") or None
     import time as _time
@@ -304,6 +327,81 @@ def _api_devices(devices):
     if not d or d == ["DEVICE_ALL"]:
         return None
     return d
+
+
+def _fetch_cbr_keyrate():
+    """Помесячная ключевая ставка ЦБ РФ (на конец месяца) из SOAP-сервиса CBR.
+
+    Возвращает {"YYYY-MM": ставка}, forward-fill по месяцам от 2021-01 до
+    текущего. None — если cbr.ru недоступен (тогда фронт берёт свой запас).
+    """
+    import calendar
+    import datetime as _dt
+    import urllib.error
+    import urllib.request
+    import xml.etree.ElementTree as ET
+
+    today = _dt.date.today()
+    envelope = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">'
+        '<soap:Body><KeyRate xmlns="http://web.cbr.ru/">'
+        '<fromDate>2021-01-01</fromDate><ToDate>%s</ToDate>'
+        '</KeyRate></soap:Body></soap:Envelope>' % today.strftime("%Y-%m-%d")
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        "https://www.cbr.ru/DailyInfoWebServ/DailyInfo.asmx", data=envelope,
+        headers={"Content-Type": "text/xml; charset=utf-8",
+                 "SOAPAction": "http://web.cbr.ru/KeyRate"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            root = ET.fromstring(resp.read())
+    except (urllib.error.URLError, OSError, ET.ParseError):
+        return None
+
+    local = lambda tag: tag.rsplit("}", 1)[-1]
+    points = []
+    for kr in root.iter():
+        if local(kr.tag) != "KR":
+            continue
+        dt = rate = None
+        for ch in kr:
+            t = local(ch.tag)
+            if t == "DT":
+                dt = (ch.text or "")[:10]
+            elif t == "Rate":
+                try:
+                    rate = float((ch.text or "").replace(",", "."))
+                except ValueError:
+                    rate = None
+        if dt and rate is not None:
+            points.append((dt, rate))
+    if not points:
+        return None
+    points.sort()
+
+    rates, last, pi = {}, None, 0
+    y, m = 2021, 1
+    while (y, m) <= (today.year, today.month):
+        eom = "%04d-%02d-%02d" % (y, m, calendar.monthrange(y, m)[1])
+        while pi < len(points) and points[pi][0] <= eom:
+            last = points[pi][1]
+            pi += 1
+        if last is not None:
+            rates["%04d-%02d" % (y, m)] = last
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+    return rates or None
+
+
+def _strip_otp_suffix(phrase):
+    """Убирает хвостовое «ОТП»/«otp» из фразы (регистронезависимо).
+
+    «Дебетовые карты ОТП» → «Дебетовые карты». Внутренние «ОТП» не трогаем.
+    """
+    import re
+    return re.sub(r"\s+отп\s*$", "", phrase, flags=re.IGNORECASE).strip() or phrase
 
 
 def _phrase_history(phrase, devices, client, index):
