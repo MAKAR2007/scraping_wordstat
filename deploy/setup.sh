@@ -83,6 +83,13 @@ systemctl enable wordstat
 systemctl restart wordstat
 
 echo "==> [6/7] nginx reverse proxy на порт 80"
+# Если HTTPS уже настроен (certbot добавил `listen 443 ssl`) — НЕ перезаписываем
+# конфиг, иначе повторный деплой снёс бы сертификат/редирект. Тогда просто
+# проверяем синтаксис и перезапускаем nginx с актуальным кодом.
+if grep -q "listen 443 ssl" /etc/nginx/sites-available/wordstat 2>/dev/null; then
+  echo "    nginx уже на HTTPS — конфиг сохраняю (перевыпуск: deploy/enable-https.sh)"
+  nginx -t && systemctl reload nginx
+else
 cat > /etc/nginx/sites-available/wordstat <<'NGINX'
 server {
     listen 80 default_server;
@@ -115,6 +122,7 @@ ln -sf /etc/nginx/sites-available/wordstat /etc/nginx/sites-enabled/wordstat
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
 systemctl restart nginx
+fi
 
 echo "==> [7/7] Firewall (ufw): пускаем SSH + HTTP, затем включаем"
 # Порядок важен: сначала разрешаем 22, потом включаем — иначе можно
