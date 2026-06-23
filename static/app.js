@@ -159,20 +159,40 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 // ------------------------------------------- диапазон дат (с .. по) -------
+// Парсит дату ИЗ ЛЮБОГО формата ввода в ключ месяца "YYYY-MM". Safari на macOS
+// не поддерживает <input type=month>, поэтому ввод — обычный текст: принимаем
+// «дд.мм.гггг», «мм.гггг», «гггг-мм», «гггг». Пусто/мусор → null.
+function parseMonthKey(str) {
+  const s = (str || "").trim();
+  if (!s) return null;
+  let m;
+  if ((m = s.match(/^(\d{4})-(\d{1,2})(?:-\d{1,2})?$/)))       // 2023-12 / 2023-12-01
+    return m[1] + "-" + String(+m[2]).padStart(2, "0");
+  if ((m = s.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})$/)))  // 01.12.2023 (дд.мм.гггг)
+    return m[3] + "-" + String(+m[2]).padStart(2, "0");
+  if ((m = s.match(/^(\d{1,2})[.\/](\d{4})$/)))                // 12.2023 (мм.гггг)
+    return m[2] + "-" + String(+m[1]).padStart(2, "0");
+  if ((m = s.match(/^(\d{4})$/)))                              // 2023 → январь
+    return m[1] + "-01";
+  return null;
+}
+
 function setupRangeInputs() {
-  const keys = state.fullHist.keys;
-  if (!keys.length) return;
-  const lo = keys[0], hi = keys[keys.length - 1];
-  ["rangeFrom", "rangeTo"].forEach((id) => { $(id).min = lo; $(id).max = hi; });
-  const clamp = (v) => (v && v >= lo && v <= hi ? v : "");
-  $("rangeFrom").value = clamp($("rangeFrom").value);
-  $("rangeTo").value = clamp($("rangeTo").value);
+  // Для текстовых полей ничего не клампим/не чистим — пользовательский ввод
+  // парсится и ограничивается окном уже в applyRange.
 }
 
 function applyRange(render = true) {
   const keys = state.fullHist.keys;
-  let from = $("rangeFrom").value || keys[0];
-  let to = $("rangeTo").value || keys[keys.length - 1];
+  if (!keys.length) return;
+  const lo = keys[0], hi = keys[keys.length - 1];
+  // Пусто/непарсится → открытая граница: начало = самые ранние данные,
+  // конец = последний доступный месяц (≈ сегодня).
+  let from = parseMonthKey($("rangeFrom").value) || lo;
+  let to = parseMonthKey($("rangeTo").value) || hi;
+  // Ограничиваем доступным окном Wordstat.
+  if (from < lo) from = lo; if (from > hi) from = hi;
+  if (to < lo) to = lo; if (to > hi) to = hi;
   if (from > to) { const t = from; from = to; to = t; }
   const i0 = Math.max(0, keys.findIndex((k) => k >= from));
   let i1 = keys.length - 1;
@@ -457,11 +477,17 @@ function currentDynHist() {
 // --------------------------------------------------------------- KPI ряды --
 function renderKpi() {
   const t = periodTotals();
+  // Подпись периода: если выбран не весь диапазон — показываем фактические
+  // границы (подтверждение, что фильтр применился).
+  const h = state.hist, lbl = h.labels;
+  const isFull = h.keys.length === state.fullHist.keys.length;
+  const periodLabel = (isFull || !lbl.length) ? "весь период"
+    : (lbl[0] + " — " + lbl[lbl.length - 1]);
   $("statMarket").textContent = fmt(t.M);
-  $("statMarketFoot").textContent = "за период";
+  $("statMarketFoot").textContent = "за " + periodLabel;
   $("statOtpShare").textContent = t.share.toFixed(3).replace(".", ",") + "%";
-  $("statOtpFoot").textContent = "за период";
-  $("regionsPeriodNote").textContent = "за период";
+  $("statOtpFoot").textContent = "за " + periodLabel;
+  $("regionsPeriodNote").textContent = "за " + periodLabel;
 
   [["Market", "growthM"], ["Otp", "growthO"]].forEach(([suf, field]) => {
     const el = $("growth" + suf), foot = $("growth" + suf + "Foot");

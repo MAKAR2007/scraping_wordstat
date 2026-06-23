@@ -29,11 +29,13 @@
           <input id="phrase" type="text" placeholder="например, Дебетовые карты" autocomplete="off" required>
         </div>
         <div class="field">
-          <label for="rangeFrom">Период анализа</label>
+          <label for="rangeFrom">Период анализа (дд.мм.гггг)</label>
           <div class="range-group">
-            <input id="rangeFrom" type="month" title="Начало периода анализа">
+            <input id="rangeFrom" type="text" inputmode="numeric" autocomplete="off"
+                   placeholder="с начала" title="Начало периода — напр. 01.12.2023; пусто = с самых ранних данных">
             <span class="range-dash">—</span>
-            <input id="rangeTo" type="month" title="Конец периода анализа">
+            <input id="rangeTo" type="text" inputmode="numeric" autocomplete="off"
+                   placeholder="по сегодня" title="Конец периода — напр. 31.05.2026; пусто = по сегодняшний день">
             <button type="button" id="rangeAllBtn" class="range-all" title="Сбросить даты: вся история">Весь период</button>
           </div>
         </div>
