@@ -163,6 +163,34 @@ textarea::placeholder { color: #aab0bf; font-weight: 500; }
   background: linear-gradient(90deg, #EFF6E2 0%, #7AB829 50%, #2F5212 100%);
   border: 1px solid var(--line-2);
 }
+
+/* --- Управление списком банков (брендовый анализ) --- */
+.bank-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-bottom: 16px; }
+.bank-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.bank-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: #fff; border: 1.5px solid var(--line-2); border-radius: 999px;
+  padding: 5px 10px 5px 11px; font-size: 13px; font-weight: 600; color: var(--ink);
+}
+.bank-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+.bank-chip-x {
+  border: none; background: none; cursor: pointer; color: var(--muted);
+  font-size: 16px; line-height: 1; padding: 0 0 0 2px; font-weight: 700;
+}
+.bank-chip-x:hover { color: #E8467C; }
+.bank-add { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.bank-add input {
+  font: inherit; font-weight: 600; padding: 9px 12px;
+  border: 1.5px solid var(--line-2); border-radius: var(--radius-sm);
+  background: #fff; color: var(--ink); outline: none; min-width: 240px;
+}
+.bank-add input:focus { border-color: var(--brand); box-shadow: 0 0 0 4px var(--brand-soft); }
+.btn--add {
+  background: var(--brand-soft); color: var(--brand-dark); border: 1.5px solid var(--brand);
+  padding: 9px 14px; font-size: 13.5px; white-space: nowrap;
+}
+.btn--add:hover { background: #e4f1d2; }
+.bank-loading { font-size: 12.5px; color: var(--muted); font-weight: 600; }
 .ru-map { width: 100%; height: auto; display: block; }
 .ru-map path { transition: fill .15s, opacity .15s; cursor: pointer; }
 .ru-map path:hover { opacity: .82; stroke: var(--ink); stroke-width: 1; }

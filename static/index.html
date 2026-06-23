@@ -225,21 +225,29 @@
       <!-- Бренды банков: Share of Search -->
       <p class="section-eyebrow hidden" id="brandEyebrow">Бренды банков · доля голоса (Share of Search)</p>
       <div class="hidden" id="brandSection">
+        <div class="bank-controls">
+          <div id="bankChips" class="bank-chips"></div>
+          <form id="bankAddForm" class="bank-add">
+            <input id="bankInput" type="text" list="bankPresets" placeholder="Добавить банк (напр. Газпромбанк)" autocomplete="off">
+            <button type="submit" class="btn btn--add">+ Добавить</button>
+          </form>
+          <datalist id="bankPresets"></datalist>
+        </div>
         <section class="stats">
           <div class="stat-card stat-card--market">
-            <span class="stat-label">Запросы топ-5 банков</span>
+            <span class="stat-label">Запросы топ банков</span>
             <span id="brandTotalVal" class="stat-value">—</span>
-            <span class="stat-foot" id="brandTotalFoot">сумма запросов 5 банков</span>
+            <span class="stat-foot" id="brandTotalFoot">сумма запросов банков</span>
           </div>
           <div class="stat-card stat-card--market">
             <span class="stat-label">Прирост запросов банков</span>
             <span id="brandGrowthVal" class="stat-value">—</span>
-            <span class="stat-foot" id="brandGrowthFoot">топ-5 банков за период</span>
+            <span class="stat-foot" id="brandGrowthFoot">топ банков за период</span>
           </div>
           <div class="stat-card stat-card--otp">
             <span class="stat-label">SoS · доля голоса ОТП</span>
             <span id="sosValue" class="stat-value">—</span>
-            <span class="stat-foot stat-foot--tight" id="sosValueFoot">ОТП ÷ (ОТП + Сбер + Т-Банк + Альфа + ВТБ)</span>
+            <span class="stat-foot stat-foot--tight" id="sosValueFoot">ОТП ÷ сумма выбранных банков</span>
           </div>
           <div class="stat-card stat-card--otp-soft">
             <span class="stat-label">Лидер роста SoS</span>
@@ -249,12 +257,12 @@
         </section>
         <div class="grid-2">
           <section class="panel">
-            <h2>Брендовые запросы по топ-5 банкам</h2>
+            <h2>Брендовые запросы по топ банкам</h2>
             <p class="chart-note">Логарифмическая шкала</p>
             <div class="chart-box"><canvas id="brandDemandChart"></canvas></div>
           </section>
           <section class="panel">
-            <h2>Доля голоса ОТП среди топ-5 банков (SoS)</h2>
+            <h2>Доля голоса ОТП среди топ банков (SoS)</h2>
             <div class="chart-box"><canvas id="sosChart"></canvas></div>
           </section>
         </div>
