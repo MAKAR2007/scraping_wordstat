@@ -9,6 +9,10 @@ let state = {
   regions: [], dynRegion: "ALL", bucketLabel: "", competitors: [],
   source: "", queryPhrase: "", knownPhrases: [],
   brandOtp: [], brandOtpFull: [], mobile: null, mobileFull: null,
+  // Брендовый спрос банков (реальные ряды из /api/brands). banks — текущий
+  // список банков-конкурентов (без ОТП); bankSeriesFull — кэш по query за 48
+  // мес.; bankSeries — срез под выбранный период.
+  banks: [], bankSeriesFull: {}, bankSeries: {}, banksLoading: false,
 };
 let charts = {};
 let topLimit = 15;
@@ -22,6 +26,7 @@ let growthStart = 0;        // индекс стартовой точки тем
 
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => Math.round(n || 0).toLocaleString("ru-RU");
+const esc = (s) => { const d = document.createElement("div"); d.textContent = s == null ? "" : s; return d.innerHTML; };
 const fmtPct = (v) => { v = Number(v) || 0; return v.toFixed(v < 1 ? 3 : 2).replace(".", ",") + "%"; };
 const signPct = (v, d = 1) => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(d).replace(".", ",") + " %";
 
@@ -37,10 +42,37 @@ const YEAR_COLORS = ["#3D7BF0", "#21A36B", "#FF7A1A", "#E8467C", "#6C4CF1", "#F5
 const CAT_COLORS = ["#6C4CF1", "#7AB829", "#FF7A1A", "#22B8CF", "#E8467C",
   "#F5B301", "#2F9E6E", "#9B5DE5", "#3D7BF0", "#FF6B6B", "#12B886", "#FA5252",
   "#4C6EF5", "#BE4BDB", "#FD7E14"];
-// Фирменные цвета банков (для конкурентных графиков). Т-Банк — фирменный жёлтый.
-const BRAND_COLORS = { "ОТП": "#7AB829", "Альфа": "#EF3124", "Т-Банк": "#F5C400",
-  "Сбер": "#21A038", "ВТБ": "#00AEEF", "Райффайзен": "#E8A200" };
+// Фирменные цвета банков (для конкурентных графиков) — совпадают с реальными
+// брендами (напр. Газпромбанк — тёмно-синий). Неизвестный банк получит цвет
+// из категориальной палитры по хешу имени.
+const BRAND_COLORS = {
+  "ОТП": "#7AB829", "Сбер": "#21A038", "Т-Банк": "#F5C400", "Альфа": "#EF3124",
+  "ВТБ": "#009FDF", "Газпромбанк": "#1C3F94", "Россельхозбанк": "#00573F",
+  "Совкомбанк": "#B5121B", "Открытие": "#00B0CA", "Райффайзен": "#E8A200",
+  "Почта Банк": "#2B57A7", "МКБ": "#7A1FA2", "Росбанк": "#E4002B",
+  "Тинькофф": "#F5C400", "Уралсиб": "#00803B", "Дом.РФ": "#00A0A0",
+};
 const brandColor = (b) => BRAND_COLORS[b] || CAT_COLORS[(hashStr(b) % CAT_COLORS.length)];
+
+// Пресеты банков: отображаемое имя -> брендовый запрос для API. Топ-банки по
+// умолчанию + словарь для распознавания добавленного пользователем банка.
+const BANK_PRESETS = [
+  { name: "Сбер", query: "Сбербанк" },
+  { name: "Т-Банк", query: "Т-Банк" },
+  { name: "Альфа", query: "Альфа-Банк" },
+  { name: "ВТБ", query: "ВТБ" },
+  { name: "Газпромбанк", query: "Газпромбанк" },
+  { name: "Россельхозбанк", query: "Россельхозбанк" },
+  { name: "Совкомбанк", query: "Совкомбанк" },
+  { name: "Открытие", query: "банк Открытие" },
+  { name: "Райффайзен", query: "Райффайзенбанк" },
+  { name: "Почта Банк", query: "Почта Банк" },
+  { name: "МКБ", query: "МКБ банк" },
+  { name: "Росбанк", query: "Росбанк" },
+  { name: "Уралсиб", query: "Уралсиб" },
+];
+// Топ-5 банков по умолчанию (без ОТП — ОТП приходит из основного поиска).
+const DEFAULT_BANKS = ["Сбер", "Т-Банк", "Альфа", "ВТБ"];
 const MONTH_ABBR = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
 
 if (window.Chart) {
@@ -110,6 +142,12 @@ document.addEventListener("DOMContentLoaded", () => {
   bindToggle("seasonToggle", (d) => { seasonMetric = d.metric; renderSeasonalityChart(); });
   bindToggle("keyRateToggle", (d) => { keyRateMetric = d.metric; renderKeyRateChart(); });
 
+  // Добавление банка в брендовый анализ + подсказки в datalist.
+  const dl = $("bankPresets");
+  if (dl) BANK_PRESETS.forEach((p) => { const o = document.createElement("option"); o.value = p.name; dl.appendChild(o); });
+  const bankForm = $("bankAddForm");
+  if (bankForm) bankForm.addEventListener("submit", (e) => { e.preventDefault(); addBankFromInput(); });
+
   // Актуальная ключевая ставка ЦБ РФ — подгружается автоматически (с кэшем на
   // сервере). Если уже есть результат поиска — перерисовываем график ставки.
   fetch("/api/keyrate").then((r) => r.json()).then((d) => {
@@ -145,6 +183,7 @@ function applyRange(render = true) {
   state.brandOtp = sl(state.brandOtpFull);
   state.mobile = state.mobileFull
     ? { market: sl(state.mobileFull.market), otp: sl(state.mobileFull.otp) } : null;
+  sliceBankSeries();
   growthStart = 0;
   if (render) renderAll();
 }
@@ -176,6 +215,7 @@ async function onSearch(e) {
     state.brandOtpFull = data.brandOtp || [];
     state.mobileFull = data.mobile || null;
     state.dynRegion = "ALL";
+    if (!state.banks.length) state.banks = defaultBanks();
     excluded.clear();
     setupRangeInputs();
     // ВАЖНО: показываем результаты ДО отрисовки графиков — иначе Chart.js
@@ -188,6 +228,7 @@ async function onSearch(e) {
     populateRegionSelect();
     renderExcludeChips();
     renderAll();
+    fetchBanks();               // реальные ряды банков (кэшируются, фраза-независимы)
   } catch (err) {
     showError(err.message);
   } finally {
@@ -822,26 +863,76 @@ async function onExport() {
 }
 
 // ------------------------------------------- бренды банков и SoS ----------
-// База брендовых запросов конкурентов — оценка по публичным порядкам Wordstat
-// («сбербанк» ≫ «т-банк» > «альфа банк» ≈ «втб» ≫ «отп банк»). Ряд ОТП — реальный.
-const BANK_BRANDS = [
-  { brand: "Сбер", base: 11500000, growth: 0.05 },
-  { brand: "Т-Банк", base: 4900000, growth: 0.14 },
-  { brand: "Альфа", base: 2700000, growth: 0.09 },
-  { brand: "ВТБ", base: 2250000, growth: 0.03 },
-];
+// Все ряды банков — реальные из API (/api/brands). ОТП приходит из основного
+// поиска (state.brandOtp). Пользователь может добавить любой банк — он так же
+// анализируется, и весь блок (SoS, плитки, графики) пересчитывается.
+
+// Имя банка -> {name, query, color}. Известный банк берёт пресет и брендовый
+// цвет; произвольный ввод — сам себе query, цвет по хешу.
+function resolveBank(input) {
+  const s = (input || "").trim();
+  if (!s) return null;
+  const low = s.toLowerCase().replace(/банк/g, "").replace(/[^а-яёa-z0-9]/gi, "");
+  for (const p of BANK_PRESETS) {
+    const pl = p.name.toLowerCase().replace(/[^а-яёa-z0-9]/gi, "");
+    const ql = p.query.toLowerCase().replace(/банк/g, "").replace(/[^а-яёa-z0-9]/gi, "");
+    if (low && (low === pl || low === ql || pl.includes(low) || low.includes(ql))) {
+      return { name: p.name, query: p.query, color: brandColor(p.name) };
+    }
+  }
+  return { name: s, query: s, color: brandColor(s) };
+}
+
+function defaultBanks() {
+  return DEFAULT_BANKS.map((n) => {
+    const p = BANK_PRESETS.find((x) => x.name === n);
+    return { name: n, query: p ? p.query : n, color: brandColor(n) };
+  });
+}
+
+// Запрашивает реальные ряды банков и кэширует по query. Затем перерисовывает
+// блок брендов. queries по умолчанию — текущий список банков.
+function fetchBanks(queries) {
+  const qs = (queries || state.banks.map((b) => b.query))
+    .filter((q) => !(q in state.bankSeriesFull));
+  if (!qs.length) { sliceBankSeries(); renderBrandSection(); return Promise.resolve(); }
+  state.banksLoading = true;
+  renderBrandSection();
+  return fetch("/api/brands", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ queries: qs }),
+  }).then((r) => r.json()).then((d) => {
+    (d.series || []).forEach((s) => { state.bankSeriesFull[s.query] = s.monthly; });
+  }).catch(() => {}).finally(() => {
+    state.banksLoading = false;
+    sliceBankSeries();
+    renderBrandSection();
+  });
+}
+
+// Срез кэшированных рядов банков под текущий период (по тем же индексам, что и
+// state.hist в рамках 48-месячного окна).
+function sliceBankSeries() {
+  const fk = state.fullHist.keys;
+  if (!fk.length) { state.bankSeries = {}; return; }
+  const from = state.hist.keys[0], to = state.hist.keys[state.hist.keys.length - 1];
+  let i0 = fk.indexOf(from), i1 = fk.indexOf(to);
+  if (i0 < 0) i0 = 0;
+  if (i1 < 0) i1 = fk.length - 1;
+  state.bankSeries = {};
+  Object.keys(state.bankSeriesFull).forEach((q) => {
+    state.bankSeries[q] = state.bankSeriesFull[q].slice(i0, i1 + 1);
+  });
+}
 
 function brandSeries() {
   const otp = state.brandOtp || [];
   if (!otp.some((v) => v != null)) return null;
-  const n = otp.length;
-  const rows = BANK_BRANDS.map((b) => ({
-    brand: b.brand, est: true,
-    series: otp.map((v, i) => v == null ? null :
-      Math.round(b.base * (1 + 0.05 * Math.sin(i / 1.7 + (hashStr(b.brand) % 10))) *
-                 (1 + b.growth * (i - n + 13) / 12))),
+  const rows = state.banks.map((b) => ({
+    brand: b.name, color: b.color, removable: true,
+    series: state.bankSeries[b.query] || otp.map(() => null),
   }));
-  rows.push({ brand: "ОТП", est: false, series: otp.slice() });
+  rows.push({ brand: "ОТП", color: C.otp, removable: false, series: otp.slice() });
   return rows;
 }
 
@@ -850,7 +941,18 @@ function renderBrandSection() {
   const eyebrow = $("brandEyebrow"), sect = $("brandSection");
   if (!rows) { eyebrow.classList.add("hidden"); sect.classList.add("hidden"); return; }
   eyebrow.classList.remove("hidden"); sect.classList.remove("hidden");
+  renderBankChips();
 
+  // Пока реальные ряды банков не подгрузились — показываем заглушку вместо
+  // вводящего в заблуждение «ОТП = 100% SoS».
+  const haveBankData = state.banks.length === 0 ||
+    state.banks.some((b) => (state.bankSeries[b.query] || []).some((v) => v != null));
+  if (!haveBankData) {
+    ["brandTotalVal", "brandGrowthVal", "sosValue", "sosLeader"].forEach((id) => { $(id).textContent = "…"; });
+    return;
+  }
+
+  const nBanks = rows.length;
   const per = periodKey();
   // --- Графики: ряды банков по бакетам выбранной гранулярности (только ось X) ---
   const otpRow = rows.find((r) => r.brand === "ОТП");
@@ -859,7 +961,7 @@ function renderBrandSection() {
   const labels = valid.map((i) => otpAgg.labels[i]);
   const bankAgg = rows.map((r) => {
     const a = aggByPeriod(r.series, per);
-    return { brand: r.brand, est: r.est, vals: valid.map((i) => a.values[i] || 0) };
+    return { brand: r.brand, color: r.color, vals: valid.map((i) => a.values[i] || 0) };
   });
   const otpVals = bankAgg.find((r) => r.brand === "ОТП").vals;
   const total = labels.map((_, j) => bankAgg.reduce((a, r) => a + r.vals[j], 0));
@@ -874,16 +976,16 @@ function renderBrandSection() {
   const sumOtp = otpRow.series.reduce((a, b) => a + (b || 0), 0);
   const fi = totMonthly.findIndex((v) => v > 0), liM = monthsN - 1;
 
-  // Плитка 1: суммарные запросы топ-5 банков за период.
+  // Плитка 1: суммарные запросы по всем выбранным банкам за период.
   $("brandTotalVal").textContent = fmt(sumAll);
-  $("brandTotalFoot").textContent = "сумма 5 банков за период";
+  $("brandTotalFoot").textContent = "сумма " + nBanks + " банков за период";
   // Плитка 2: динамика запросов банков за период (первый → последний месяц).
   const gEl = $("brandGrowthVal");
   if (fi >= 0 && totMonthly[fi]) {
     const g = (totMonthly[liM] - totMonthly[fi]) / totMonthly[fi] * 100;
     gEl.textContent = signPct(g); gEl.className = "stat-value " + (g >= 0 ? "growth-up" : "growth-down");
   } else { gEl.textContent = "—"; gEl.className = "stat-value"; }
-  $("brandGrowthFoot").textContent = "топ-5 банков за период";
+  $("brandGrowthFoot").textContent = "топ банков за период";
 
   // Плитка 3: SoS ОТП за период (сумма ОТП ÷ сумма всех банков).
   $("sosValue").textContent = (sumAll ? sumOtp / sumAll * 100 : 0).toFixed(2).replace(".", ",") + "%";
@@ -923,7 +1025,7 @@ function renderBrandSection() {
     type: "line",
     data: { labels, datasets: bankAgg.map((r) => ({
       label: r.brand, data: r.vals,
-      borderColor: r.brand === "ОТП" ? C.otp : brandColor(r.brand), backgroundColor: "transparent",
+      borderColor: r.color, backgroundColor: "transparent",
       borderWidth: r.brand === "ОТП" ? 3.6 : 2, tension: .35, pointRadius: 0,
     })) },
     options: {
@@ -953,6 +1055,50 @@ function renderBrandSection() {
       },
     },
   });
+}
+
+// Чипы выбранных банков (ОТП — фиксированный, остальные удаляемые) + статус
+// загрузки. Добавление/удаление банка пересчитывает весь блок.
+function renderBankChips() {
+  const box = $("bankChips");
+  if (!box) return;
+  box.innerHTML = "";
+  const mk = (label, color, removable, onRemove) => {
+    const chip = document.createElement("span");
+    chip.className = "bank-chip";
+    chip.innerHTML = '<span class="bank-dot" style="background:' + color + '"></span>' + esc(label);
+    if (removable) {
+      const x = document.createElement("button");
+      x.type = "button"; x.className = "bank-chip-x"; x.setAttribute("aria-label", "Убрать " + label);
+      x.textContent = "×";
+      x.addEventListener("click", onRemove);
+      chip.appendChild(x);
+    }
+    box.appendChild(chip);
+  };
+  mk("ОТП", C.otp, false, null);
+  state.banks.forEach((b) => mk(b.name, b.color, true, () => removeBank(b.query)));
+  if (state.banksLoading) {
+    const s = document.createElement("span");
+    s.className = "bank-loading"; s.textContent = "загрузка…";
+    box.appendChild(s);
+  }
+}
+
+function addBankFromInput() {
+  const input = $("bankInput");
+  const bank = resolveBank(input.value);
+  if (!bank) return;
+  input.value = "";
+  if (state.banks.some((b) => b.query.toLowerCase() === bank.query.toLowerCase())) return;
+  state.banks.push(bank);
+  fetchBanks([bank.query]);   // дозапросим только новый банк; затем пересчёт
+}
+
+function removeBank(query) {
+  state.banks = state.banks.filter((b) => b.query !== query);
+  sliceBankSeries();
+  renderBrandSection();       // пересчёт всего блока без новых запросов
 }
 
 // ------------------------------------- качество запросов: интенты, TQI, mobile --

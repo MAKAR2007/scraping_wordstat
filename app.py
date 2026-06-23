@@ -71,6 +71,19 @@ def _require_auth():
     )
 
 
+@app.after_request
+def _cache_headers(resp):
+    """HTML/JS/CSS — без кэша (чтобы после деплоя сразу подхватывалась свежая
+    версия и не было «залипшего» старого app.js); тяжёлая статика (шрифты,
+    chart.js, geojson) — кэшируется надолго."""
+    path = request.path
+    if "/vendor/" in path:
+        resp.headers["Cache-Control"] = "public, max-age=2592000"  # 30 дней
+    elif path == "/" or path.endswith((".html", ".js", ".css")):
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return resp
+
+
 # Индекс субъектов кэшируется на время жизни процесса.
 _subject_index_cache = {"value": None}
 
@@ -78,6 +91,11 @@ _subject_index_cache = {"value": None}
 # а на время уходим в локальные данные (предохранитель).
 _api_down_until = {"t": 0.0}
 _API_COOLDOWN = 120  # сек
+
+# Короткие отображаемые имена для длинных объединений из дерева API.
+_REGION_DISPLAY = {
+    "Санкт-Петербург и Ленинградская область": "Санкт-Петербург и Лен. область",
+}
 
 
 def get_subject_index(client):
@@ -167,6 +185,9 @@ def search():
         ws = region_weights.weights_for(names)
         subjects = [{"id": sid, "name": name, "weight": w}
                     for (sid, name), w in zip(index["subjects"].items(), ws)]
+    # Короткие отображаемые имена для длинных объединений API.
+    for s in subjects:
+        s["name"] = _REGION_DISPLAY.get(s["name"], s["name"])
 
     # Конкурентный анализ: бренды в категории (масштаб по устройству как у ОТП).
     of = _device_factors(devices)[1]
@@ -282,6 +303,47 @@ def compare_export():
         mimetype="application/vnd.openxmlformats-officedocument."
                  "spreadsheetml.sheet",
     )
+
+
+@app.route("/api/brands", methods=["POST"])
+def brands():
+    """Месячные ряды брендового спроса по банкам (за 48 мес.), из API.
+
+    queries — список брендовых запросов («Сбербанк», «Газпромбанк», …).
+    Возвращает {keys, series:[{query, monthly}], demo}. Спрос на бренд банка не
+    зависит от анализируемой фразы, поэтому фронт кэширует результат и
+    дозапрашивает только при изменении списка банков.
+    """
+    import time as _time
+
+    payload = request.get_json(force=True, silent=True) or {}
+    queries, seen = [], set()
+    for raw in payload.get("queries") or []:
+        q = (raw or "").strip()
+        low = q.lower()
+        if q and low not in seen:
+            seen.add(low)
+            queries.append(q)
+    queries = queries[:15]
+    if not queries:
+        return jsonify({"error": "Не заданы бренды"}), 400
+
+    win = last_n_months(48)
+    keys = win["keys"]
+    cooled = _time.time() < _api_down_until["t"]
+    client = WordstatClient(force_demo=cooled)
+
+    series = []
+    for q in queries:
+        try:
+            monthly = client.monthly_history(q, keys)
+        except YandexError:
+            _api_down_until["t"] = _time.time() + _API_COOLDOWN
+            client = WordstatClient(force_demo=True)
+            monthly = client.monthly_history(q, keys)
+        series.append({"query": q, "monthly": [int(v) for v in monthly]})
+
+    return jsonify({"keys": keys, "series": series, "demo": client.demo_mode})
 
 
 @app.route("/api/export", methods=["POST"])
